@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <style>
+      /* Disable transitions on load */
+      .no-transition * {
+        transition: none !important;
+      }
+    </style>
+    <script>
+      // Immediately add no-transition class
+      document.documentElement.classList.add('no-transition');
+      window.addEventListener('load', function() {
+        setTimeout(function() {
+          document.documentElement.classList.remove('no-transition');
+        }, 50);
+      });
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PICTUR3D</title>
+    <!-- Fonts and CSS -->
+    <link href="https://fonts.googleapis.com/css2?family=Doto&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- Load moment, Chart.js, and adapter in correct order -->
+    <script src="https://cdn.jsdelivr.net/npm/moment"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment"></script>
+    <link id="favicon" rel="icon" type="image/png" href="{{ url_for('static', filename='img/favicon.png') }}">
+  </head>
+  <body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-light" id="navbar">
+      <a class="navbar-brand" href="#"><strong>PICTUR3D</strong></a>
+      <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarNav">
+        <ul class="navbar-nav ml-auto">
+          <li class="nav-item">
+            <button id="themeToggle" class="btn btn-outline-secondary"></button>
+          </li>
+        </ul>
+      </div>
+    </nav>
+
+    <!-- Dashboard Section -->
+    <div class="container mt-4" id="dashboardSection">
+      <h1 class="mb-4">Dashboard</h1>
+      <!-- Simulation Parameters Card -->
+      <div class="card mb-4" id="parametersCard">
+        <div class="card-body">
+          <h5>Simulation Parameters</h5>
+          <div class="form-group">
+            <label for="startDate">Start Date</label>
+            <input type="date" id="startDate" class="form-control" value="2020-01-01">
+          </div>
+          <div class="form-group">
+            <label for="endDate">End Date</label>
+            <input type="date" id="endDate" class="form-control">
+          </div>
+          <div class="form-group">
+            <label for="stopLoss">Stop Loss (%)</label>
+            <input type="number" id="stopLoss" class="form-control" value="5" step="0.1">
+          </div>
+          <div class="form-group">
+            <label for="takeProfit">Take Profit (%)</label>
+            <input type="number" id="takeProfit" class="form-control" value="10" step="0.1">
+          </div>
+        </div>
+      </div>
+
+      <!-- Trading Mode Card -->
+      <div class="card mb-4">
+        <div class="card-body">
+          <h5>Trading Mode</h5>
+          <div class="form-group">
+            <select id="modeSelect" class="form-control">
+              <option value="backtest">Backtest</option>
+              <option value="paper">Paper trading</option>
+              <option value="live">Live trading</option>
+            </select>
+          </div>
+          <button id="startSimulation" class="btn btn-primary">Start</button>
+          <button id="resetAgentBtn" class="btn btn-warning" style="margin-left: 10px; display: none;">Reset agent</button>
+          <div id="simulationStatus" class="mt-3"></div>
+        </div>
+      </div>
+
+      <!-- Logs Card -->
+      <div id="logsCard" class="card mb-4">
+        <div class="card-body">
+          <h5>Logs</h5>
+          <div id="liveActions" class="live-actions" style="height:200px; overflow-y:auto;"></div>
+        </div>
+      </div>
+
+      <!-- Results & Charts Card -->
+      <div id="resultsCard" class="card mb-4" style="position: relative;">
+        <div class="card-body">
+          <h5>Results</h5>
+          <div class="row">
+            <div class="col-md-6">
+              <canvas id="equityChart"></canvas>
+            </div>
+            <div class="col-md-6">
+              <canvas id="btcPriceChart"></canvas>
+            </div>
+          </div>
+          <div class="row mt-4">
+            <div class="col-md-6">
+              <canvas id="lossChart"></canvas>
+            </div>
+            <div class="col-md-6">
+              <canvas id="agentPerformanceChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- jQuery and Bootstrap JS (loaded after main content) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Main JS -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  </body>
+</html>

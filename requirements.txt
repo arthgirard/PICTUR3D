@@ -1,0 +1,10 @@
+Flask
+yfinance
+pandas
+numpy
+torch
+transformers
+requests
+certifi
+python-dotenv
+matplotlib

@@ -1,0 +1,5 @@
+*.env
+*.pth
+*.json
+*.pkl
+*__pycache__/
