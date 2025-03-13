@@ -1,3 +1,5 @@
+# agent.py
+
 import os
 import pickle
 import numpy as np
@@ -7,9 +9,10 @@ import torch.nn.functional as F
 import torch.optim as optim
 import logging
 from torch.nn.utils import clip_grad_norm_
+from typing import Tuple, List, Any, Optional
 
 class DuelingDQN(nn.Module):
-    def __init__(self, input_dim, action_dim, use_lstm=False):
+    def __init__(self, input_dim: int, action_dim: int, use_lstm: bool = False) -> None:
         super(DuelingDQN, self).__init__()
         self.use_lstm = use_lstm
         self.fc1 = nn.Linear(input_dim, 128)
@@ -24,7 +27,7 @@ class DuelingDQN(nn.Module):
         self.advantage_fc = nn.Linear(lstm_output_dim, 64)
         self.advantage = nn.Linear(64, action_dim)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.dropout(x)
@@ -39,15 +42,16 @@ class DuelingDQN(nn.Module):
         qvals = value + (advantage - advantage.mean(dim=1, keepdim=True))
         return qvals
 
+
 class PrioritizedReplayBuffer:
-    def __init__(self, capacity, alpha=0.6):
+    def __init__(self, capacity: int, alpha: float = 0.6) -> None:
         self.capacity = capacity
-        self.buffer = []
+        self.buffer: List[Any] = []
         self.pos = 0
         self.priorities = np.zeros((capacity,), dtype=np.float32)
         self.alpha = alpha
 
-    def add(self, state, action, reward, next_state, done):
+    def add(self, state: np.ndarray, action: int, reward: float, next_state: np.ndarray, done: bool) -> None:
         max_priority = self.priorities.max() if self.buffer else 1.0
         if len(self.buffer) < self.capacity:
             self.buffer.append((state, action, reward, next_state, done))
@@ -56,7 +60,7 @@ class PrioritizedReplayBuffer:
         self.priorities[self.pos] = max_priority
         self.pos = (self.pos + 1) % self.capacity
 
-    def sample(self, batch_size, beta=0.4):
+    def sample(self, batch_size: int, beta: float = 0.4) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         if len(self.buffer) == self.capacity:
             priorities = self.priorities
         else:
@@ -77,28 +81,29 @@ class PrioritizedReplayBuffer:
         dones = np.array(batch[4])
         return states, actions, rewards, next_states, dones, indices, weights
 
-    def update_priorities(self, indices, priorities):
+    def update_priorities(self, indices: List[int], priorities: np.ndarray) -> None:
         for idx, priority in zip(indices, priorities):
             self.priorities[idx] = priority
 
-    def save(self, path):
+    def save(self, path: str) -> None:
         try:
             with open(path, 'wb') as f:
                 pickle.dump((self.buffer, self.pos, self.priorities), f)
-            logging.info("Replay buffer saved to %s", path)
+            logging.info(f"Replay buffer saved to {path}")
         except Exception as e:
-            logging.error("Error saving replay buffer: %s", e)
+            logging.error(f"Error saving replay buffer: {e}")
 
-    def load(self, path):
+    def load(self, path: str) -> None:
         try:
             with open(path, 'rb') as f:
                 self.buffer, self.pos, self.priorities = pickle.load(f)
-            logging.info("Replay buffer loaded from %s", path)
+            logging.info(f"Replay buffer loaded from {path}")
         except Exception as e:
-            logging.error("Error loading replay buffer: %s", e)
+            logging.error(f"Error loading replay buffer: {e}")
+
 
 class TradingAgent:
-    def __init__(self, input_dim, action_dim, use_lstm=False, lr=1e-4, gamma=0.99, tau=0.005, device="cpu", buffer_capacity=10000):
+    def __init__(self, input_dim: int, action_dim: int, use_lstm: bool = False, lr: float = 1e-4, gamma: float = 0.99, tau: float = 0.005, device: str = "cpu", buffer_capacity: int = 10000) -> None:
         self.device = device
         self.action_dim = action_dim
         self.gamma = gamma
@@ -113,20 +118,20 @@ class TradingAgent:
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr, weight_decay=1e-5)
         self.replay_buffer = PrioritizedReplayBuffer(capacity=buffer_capacity)
 
-    def select_action(self, state):
+    def select_action(self, state: np.ndarray) -> int:
         if np.random.rand() < self.epsilon:
             action = np.random.randint(self.action_dim)
-            logging.debug("Random action: %d", action)
+            logging.debug(f"Random action: {action}")
             return action
         else:
-            state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             with torch.no_grad():
-                q_values = self.policy_net(state)
+                q_values = self.policy_net(state_tensor)
             action = q_values.argmax().item()
-            logging.debug("Policy action: %d", action)
+            logging.debug(f"Policy action: {action}")
             return action
 
-    def train(self, batch_size=64, beta=0.4):
+    def train(self, batch_size: int = 64, beta: float = 0.4) -> Optional[float]:
         if len(self.replay_buffer.buffer) < batch_size:
             return None
         states, actions, rewards, next_states, dones, indices, weights = self.replay_buffer.sample(batch_size, beta)
@@ -143,7 +148,7 @@ class TradingAgent:
             next_q = self.target_net(next_states).gather(1, next_actions)
             target_q = rewards + (1 - dones) * self.gamma * next_q
 
-        loss = (weights * F.mse_loss(current_q, target_q, reduction='none')).mean()
+        loss = (weights * nn.functional.mse_loss(current_q, target_q, reduction='none')).mean()
         self.optimizer.zero_grad()
         loss.backward()
         clip_grad_norm_(self.policy_net.parameters(), 1.0)
@@ -157,11 +162,11 @@ class TradingAgent:
             self.epsilon *= self.epsilon_decay
         return loss.item()
 
-    def _soft_update_target(self):
+    def _soft_update_target(self) -> None:
         for target_param, param in zip(self.target_net.parameters(), self.policy_net.parameters()):
             target_param.data.copy_(target_param.data * (1 - self.tau) + param.data * self.tau)
 
-    def save(self, path="agent.pth", buffer_path="replay_buffer.pkl"):
+    def save(self, path: str = "agent.pth", buffer_path: str = "replay_buffer.pkl") -> None:
         try:
             torch.save({
                 'policy_net': self.policy_net.state_dict(),
@@ -172,9 +177,9 @@ class TradingAgent:
             self.replay_buffer.save(buffer_path)
             logging.info("Agent and replay buffer saved.")
         except Exception as e:
-            logging.error("Error saving agent: %s", e)
+            logging.error(f"Error saving agent: {e}")
 
-    def load(self, path="agent.pth", buffer_path="replay_buffer.pkl"):
+    def load(self, path: str = "agent.pth", buffer_path: str = "replay_buffer.pkl") -> None:
         try:
             checkpoint = torch.load(path, map_location=self.device)
             self.policy_net.load_state_dict(checkpoint['policy_net'])
@@ -185,4 +190,4 @@ class TradingAgent:
                 self.replay_buffer.load(buffer_path)
             logging.info("Agent and replay buffer loaded.")
         except Exception as e:
-            logging.error("Error loading agent: %s", e)
+            logging.error(f"Error loading agent: {e}")

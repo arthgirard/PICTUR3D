@@ -1,26 +1,14 @@
+# config.py
+
 import os
-import datetime
 
-# Flask / App configuration
-DEBUG = os.environ.get("FLASK_DEBUG", "False").lower() in ("true", "1", "t")
-SECRET_KEY = os.environ.get("SECRET_KEY", "your-secret-key")
+# General configuration
+INITIAL_BALANCE: float = 10000.0
+STOP_LOSS_PCT: float = 0.05
+TAKE_PROFIT_PCT: float = 0.10
+DEFAULT_START_DATE: str = "2020-01-01"
+DEFAULT_END_DATE: str = ""
 
-# API keys and external services
-KRAKEN_API_KEY = os.environ.get("KRAKEN_API_KEY")
-KRAKEN_API_SECRET = os.environ.get("KRAKEN_API_SECRET")
-
-# Data settings
-DEFAULT_SYMBOL = "BTC-USD"
-DEFAULT_START_DATE = "2020-01-01"
-DEFAULT_END_DATE = datetime.date.today().strftime("%Y-%m-%d")
-
-# Trading settings
-INITIAL_BALANCE = 10000.0
-STOP_LOSS_PCT = 0.05
-TAKE_PROFIT_PCT = 0.10
-
-# Model & training settings
-RL_LEARNING_RATE = 1e-4
-RL_GAMMA = 0.99
-RL_TAU = 0.005
-REPLAY_BUFFER_CAPACITY = 10000
+# Kraken API configuration (loaded from environment variables)
+KRAKEN_API_KEY: str = os.environ.get("KRAKEN_API_KEY", "")
+KRAKEN_API_SECRET: str = os.environ.get("KRAKEN_API_SECRET", "")

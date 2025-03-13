@@ -1,3 +1,5 @@
+# app.py
+
 import os
 import json
 import time
@@ -6,16 +8,17 @@ import datetime
 import pandas as pd
 from flask import Flask, render_template, request, jsonify
 from trading.bot import TradingBot
-from multiprocessing import Process, Manager
+from multiprocessing import Process
+from typing import Any, Dict, Optional
 
 app = Flask(__name__)
 
-# Global variables for simulation state.
+# Global placeholders for simulation state.
 simulation_results = None   # Shared dict for simulation results.
 simulation_logs = None      # Shared list for live logs.
 stop_event = None           # Shared stop event.
 
-# We'll use a regular threading.Lock for our Flask thread.
+# Use a threading.Lock for shared updates.
 from threading import Lock
 update_lock = Lock()
 
@@ -25,48 +28,15 @@ simulation_process = None
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
 
-def stop_simulation_logic():
+def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, sim_logs: Any) -> Dict:
     """
-    Simulate clicking the Stop button:
-      - Set the shared stop_event.
-      - Actively wait (polling every 0.5 sec up to 10 sec) for the simulation process to stop.
+    Runs a backtesting simulation using historical data.
     """
-    logging.info("Stop simulation logic initiated.")
-    stop_event.set()
-    global simulation_process
-    if simulation_process is not None:
-        max_wait = 10  # seconds
-        waited = 0
-        interval = 0.5  # seconds
-        try:
-            while simulation_process.is_alive() and waited < max_wait:
-                logging.info("Waiting for simulation process to stop... (waited %.1f sec)", waited)
-                time.sleep(interval)
-                waited += interval
-        except Exception as e:
-            logging.error("Error while waiting for simulation process to stop: %s", e)
-        try:
-            if simulation_process.is_alive():
-                logging.warning("Simulation process did not exit after waiting %s seconds.", max_wait)
-            else:
-                logging.info("Simulation process stopped after %.1f seconds.", waited)
-        except Exception as e:
-            logging.error("Error checking if simulation process is alive: %s", e)
-        simulation_process = None
-    else:
-        logging.info("No simulation process to stop.")
-
-
-def run_backtest_simulation(bot, stop_evt, sim_results, sim_logs):
     # Clear logs.
     sim_logs[:] = []
     data = bot.data_handler.download_data()
-    dates = []
-    asset_values = []
-    btc_prices = []
-    trade_dates = []
-    trade_prices = []
-    trade_signals = []
+    dates, asset_values, btc_prices = [], [], []
+    trade_dates, trade_prices, trade_signals = [], [], []
     losses = []
     
     # Reset account state.
@@ -80,9 +50,9 @@ def run_backtest_simulation(bot, stop_evt, sim_results, sim_logs):
             logging.info("Stop event detected at iteration %d; exiting simulation loop.", idx)
             break
 
-        # Extract date string.
+        # Extract and normalize the date value.
         date_val = pd.to_datetime(row['Date'])
-        if isinstance(date_val, pd.Series):
+        if hasattr(date_val, 'iloc'):  # Fix: if date_val is a Series, take the first element.
             date_val = date_val.iloc[0]
         date_str = date_val.strftime("%Y-%m-%d")
         
@@ -90,10 +60,7 @@ def run_backtest_simulation(bot, stop_evt, sim_results, sim_logs):
         action_idx = bot.agent.select_action(features)
         price = float(row['Close'].iloc[0]) if isinstance(row['Close'], pd.Series) else float(row['Close'])
         forced_signal = bot._check_risk_management(price)
-        if forced_signal == "sell_all":
-            action_used = "sell_all"
-        else:
-            action_used = bot.action_space[action_idx]
+        action_used = forced_signal if forced_signal == "sell_all" else bot.action_space.get(action_idx, "hold")
         
         if action_used != "hold":
             trade_dates.append(date_str)
@@ -109,11 +76,9 @@ def run_backtest_simulation(bot, stop_evt, sim_results, sim_logs):
         log_message = f"{date_str} | Action: {action_used} | Price: {price:.2f} | Total Asset: ${total_asset:.2f}"
         sim_logs.append(log_message)
         
-        reward = 0
-        if idx > 0:
-            reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2]
-            if forced_signal is None and bot.action_space[action_idx] != "hold":
-                reward -= 0.001
+        reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
+        if forced_signal is None and bot.action_space.get(action_idx, "hold") != "hold":
+            reward -= 0.001
         bot.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
         loss = bot.agent.train(batch_size=64)
         if loss is not None:
@@ -136,7 +101,6 @@ def run_backtest_simulation(bot, stop_evt, sim_results, sim_logs):
                 "max_drawdown": 0,  # Optionally compute incrementally.
                 "finished": False
             })
-        # Only sleep if not in backtest mode.
         if bot.mode != "backtest":
             time.sleep(0.2)
     
@@ -168,7 +132,8 @@ def run_backtest_simulation(bot, stop_evt, sim_results, sim_logs):
     return sim_results
 
 
-def run_simulation(stop_evt, sim_results, sim_logs, mode, start_date, end_date, stop_loss_pct, take_profit_pct):
+def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, start_date: str, end_date: Optional[str],
+                   stop_loss_pct: float, take_profit_pct: float) -> None:
     stop_evt.clear()
     bot = TradingBot(mode=mode, device="cpu", stop_loss_pct=stop_loss_pct,
                      take_profit_pct=take_profit_pct, start_date=start_date, end_date=end_date)
@@ -182,7 +147,7 @@ def run_simulation(stop_evt, sim_results, sim_logs, mode, start_date, end_date, 
         sim_results.update({"error": "Invalid mode"})
 
 
-def save_performance_metrics(new_metrics):
+def save_performance_metrics(new_metrics: Dict) -> None:
     history_file = "performance_history.json"
     if os.path.exists(history_file):
         try:
@@ -204,12 +169,12 @@ def save_performance_metrics(new_metrics):
 
 
 @app.route("/")
-def index():
+def index() -> Any:
     return render_template("index.html")
 
 
 @app.route("/start_simulation", methods=["POST"])
-def start_simulation():
+def start_simulation() -> Any:
     global simulation_process
     req = request.json
     mode = req.get("mode", "backtest")
@@ -228,33 +193,30 @@ def start_simulation():
 
 
 @app.route("/stop_simulation", methods=["POST"])
-def stop_simulation():
+def stop_simulation() -> Any:
     stop_simulation_logic()
     save_performance_metrics(dict(simulation_results))
     return jsonify({"status": "Stop signal sent and performance metrics saved."})
 
 
 @app.route("/results", methods=["GET"])
-def results_route():
+def results_route() -> Any:
     return jsonify(dict(simulation_results))
 
 
 @app.route("/live_logs", methods=["GET"])
-def live_logs_route():
+def live_logs_route() -> Any:
     return jsonify(list(simulation_logs))
 
 
 @app.route("/agent_performance", methods=["GET"])
-def agent_performance():
+def agent_performance() -> Any:
     history_file = "performance_history.json"
     if os.path.exists(history_file):
         try:
             with open(history_file, "r") as f:
                 data = json.load(f)
-            if isinstance(data, list):
-                return jsonify(data)
-            else:
-                return jsonify([])
+            return jsonify(data if isinstance(data, list) else [])
         except Exception as e:
             logging.error("Error reading performance history: %s", e)
             return jsonify({"error": "Error reading performance history"}), 500
@@ -263,7 +225,7 @@ def agent_performance():
 
 
 @app.route("/delete_agent", methods=["POST"])
-def delete_agent():
+def delete_agent() -> Any:
     global simulation_process
     stop_simulation_logic()
     save_performance_metrics(dict(simulation_results))
@@ -282,13 +244,42 @@ def delete_agent():
     else:
         return jsonify({"status": "Deletion canceled."}), 400
     
+
 @app.route("/clear_logs", methods=["POST"])
-def clear_logs():
+def clear_logs() -> Any:
     simulation_logs[:] = []
     return jsonify({"status": "Logs cleared"})
 
-if __name__ == "__main__":
-    from multiprocessing import freeze_support
+
+def stop_simulation_logic() -> None:
+    logging.info("Stop simulation logic initiated.")
+    stop_event.set()
+    global simulation_process
+    if simulation_process is not None:
+        max_wait = 10  # seconds
+        waited = 0
+        interval = 0.5  # seconds
+        try:
+            while simulation_process.is_alive() and waited < max_wait:
+                logging.info("Waiting for simulation process to stop... (waited %.1f sec)", waited)
+                time.sleep(interval)
+                waited += interval
+        except Exception as e:
+            logging.error("Error while waiting for simulation process to stop: %s", e)
+        try:
+            if simulation_process.is_alive():
+                logging.warning("Simulation process did not exit after waiting %s seconds.", max_wait)
+            else:
+                logging.info("Simulation process stopped after %.1f seconds.", waited)
+        except Exception as e:
+            logging.error("Error checking if simulation process is alive: %s", e)
+        simulation_process = None
+    else:
+        logging.info("No simulation process to stop.")
+
+
+if __name__ == '__main__':
+    from multiprocessing import freeze_support, Manager
     freeze_support()  # For Windows support.
     manager = Manager()
     simulation_results = manager.dict()

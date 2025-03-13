@@ -1,11 +1,12 @@
+/* main.js */
 document.addEventListener("DOMContentLoaded", function() {
-  // === Theme Toggle and Favicon Inversion ===
+  // Theme Toggle and Favicon Inversion Module
   const themeToggle = document.getElementById("themeToggle");
   const body = document.body;
   const navbar = document.getElementById("navbar");
+  const favicon = document.getElementById("favicon");
 
   function invertFavicon() {
-    const favicon = document.getElementById("favicon");
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.src = favicon.href;
@@ -30,20 +31,22 @@ document.addEventListener("DOMContentLoaded", function() {
   function updateThemeIcon() {
     if (body.classList.contains("dark-mode")) {
       themeToggle.innerHTML = '<i class="fas fa-sun"></i>';
-      document.getElementById("favicon").href = "/static/img/favicon.png";
+      favicon.href = "/static/img/favicon.png";
     } else {
       themeToggle.innerHTML = '<i class="fas fa-moon"></i>';
       invertFavicon();
     }
   }
 
-  if (localStorage.getItem("theme") === "dark") {
-    body.classList.add("dark-mode");
-    navbar.classList.add("dark-mode");
-  } else {
-    body.classList.add("light-mode");
+  function initializeTheme() {
+    if (localStorage.getItem("theme") === "dark") {
+      body.classList.add("dark-mode");
+      navbar.classList.add("dark-mode");
+    } else {
+      body.classList.add("light-mode");
+    }
+    updateThemeIcon();
   }
-  updateThemeIcon();
 
   themeToggle.addEventListener("click", function() {
     if (body.classList.contains("dark-mode")) {
@@ -60,7 +63,7 @@ document.addEventListener("DOMContentLoaded", function() {
     updateThemeIcon();
   });
 
-  // === Simulation Controls and Polling ===
+  // Simulation Controls Module
   const startButton = document.getElementById("startSimulation");
   const modeSelect = document.getElementById("modeSelect");
   const simulationStatus = document.getElementById("simulationStatus");
@@ -70,23 +73,19 @@ document.addEventListener("DOMContentLoaded", function() {
   const takeProfitInput = document.getElementById("takeProfit");
   const resetAgentBtn = document.getElementById("resetAgentBtn");
 
-  // jQuery selectors for animations.
   const $parametersCard = $("#parametersCard");
   const $resultsCard = $("#resultsCard");
   const $logsCard = $("#logsCard");
 
-  // Initially hide the results and logs cards.
   $resultsCard.hide();
   $logsCard.hide();
 
-  // Global simulation state
   let simulationRunning = localStorage.getItem("simulationRunning") === "true";
   let resultsInterval = null;
   let logsInterval = null;
-  let firstLogReceived = false;  // True when a new log for the current simulation is received.
+  let firstLogReceived = false;
   let lastKnownLogsCount = 0;
 
-  // === Helper: Wait for Simulation to Stop ===
   function waitForSimulationStop() {
     const stopInterval = setInterval(() => {
       fetch("/results")
@@ -94,33 +93,26 @@ document.addEventListener("DOMContentLoaded", function() {
         .then(data => {
           if (data.finished) {
             clearInterval(stopInterval);
-            // Enable the start button after the simulation has fully stopped.
             startButton.disabled = false;
           }
         })
-        .catch(err => {
-          console.error("Error waiting for simulation stop:", err);
-        });
+        .catch(err => console.error("Error waiting for simulation stop:", err));
     }, 1000);
   }
 
-  // Clear previous logs.
   function clearPreviousData() {
     $("#liveActions").empty();
     firstLogReceived = false;
     lastKnownLogsCount = 0;
   }
 
-  // === Fetch Functions ===
   function fetchResults() {
     fetch("/results")
       .then(response => response.json())
       .then(data => {
         updateCharts(data);
         if (firstLogReceived) {
-          simulationStatus.innerHTML = "<strong>Balance:</strong> $" + data.final_balance.toFixed(2) +
-            " | <strong>Trades:</strong> " + data.num_trades +
-            " | <strong>Return:</strong> " + data.percentage_return.toFixed(2) + "%";
+          simulationStatus.innerHTML = `<strong>Balance:</strong> $${data.final_balance.toFixed(2)} | <strong>Trades:</strong> ${data.num_trades} | <strong>Return:</strong> ${data.percentage_return.toFixed(2)}%`;
         }
       })
       .catch(err => {
@@ -139,13 +131,10 @@ document.addEventListener("DOMContentLoaded", function() {
       fetch("/live_logs")
         .then(response => response.json())
         .then(data => {
-          console.log("Fetched live logs:", data);
           if (!firstLogReceived && data && data.length > 0) {
             firstLogReceived = true;
             $resultsCard.slideDown(300);
             $logsCard.slideDown(300);
-            console.log("First live log received, cards shown.");
-            // Show the Stop and Reset Agent buttons.
             startButton.style.display = "inline-block";
             resetAgentBtn.style.display = "inline-block";
             fetchResults();
@@ -153,23 +142,25 @@ document.addEventListener("DOMContentLoaded", function() {
           updateLiveActions(data);
           lastKnownLogsCount = data.length;
         })
-        .catch(err => {
-          console.error("Error fetching live logs:", err);
-        });
+        .catch(err => console.error("Error fetching live logs:", err));
     }, 1000);
   }
 
-  // === Chart Initialization and Updates ===
-  let equityChart, btcPriceChart, lossChart;
   function updateCharts(data) {
+    // Check if the data object has the expected properties
+    if (!data || !data.dates || data.dates.length === 0) {
+      console.warn("No chart data available to update.");
+      return;
+    }
+  
     // Equity Chart
-    if (equityChart) {
-      equityChart.data.labels = data.dates;
-      equityChart.data.datasets[0].data = data.asset_values;
-      equityChart.update();
+    if (window.equityChart && window.equityChart.data) {
+      window.equityChart.data.labels = data.dates;
+      window.equityChart.data.datasets[0].data = data.asset_values;
+      window.equityChart.update();
     } else {
       const ctx1 = document.getElementById("equityChart").getContext("2d");
-      equityChart = new Chart(ctx1, {
+      window.equityChart = new Chart(ctx1, {
         type: "line",
         data: {
           labels: data.dates,
@@ -183,22 +174,19 @@ document.addEventListener("DOMContentLoaded", function() {
         options: { responsive: true }
       });
     }
-
-    // BTC Price Chart with trade markers (zoom functionality removed)
-    if (btcPriceChart) {
-      btcPriceChart.data.labels = data.dates;
-      btcPriceChart.data.datasets[0].data = data.btc_prices;
+  
+    // BTC Price Chart
+    if (window.btcPriceChart && window.btcPriceChart.data) {
+      window.btcPriceChart.data.labels = data.dates;
+      window.btcPriceChart.data.datasets[0].data = data.btc_prices;
       if (data.trade_dates && data.trade_prices && data.trade_signals) {
-        const tradeData = [];
-        for (let i = 0; i < data.trade_dates.length; i++) {
-          tradeData.push({
-            x: data.trade_dates[i],
-            y: data.trade_prices[i],
-            signal: data.trade_signals[i]
-          });
-        }
-        if (btcPriceChart.data.datasets.length < 2) {
-          btcPriceChart.data.datasets.push({
+        const tradeData = data.trade_dates.map((date, i) => ({
+          x: date,
+          y: data.trade_prices[i],
+          signal: data.trade_signals[i]
+        }));
+        if (window.btcPriceChart.data.datasets.length < 2) {
+          window.btcPriceChart.data.datasets.push({
             label: "Trades",
             data: tradeData,
             type: "scatter",
@@ -210,26 +198,24 @@ document.addEventListener("DOMContentLoaded", function() {
             showLine: false
           });
         } else {
-          btcPriceChart.data.datasets[1].data = tradeData;
-          btcPriceChart.data.datasets[1].pointBackgroundColor = tradeData.map(pt =>
+          window.btcPriceChart.data.datasets[1].data = tradeData;
+          window.btcPriceChart.data.datasets[1].pointBackgroundColor = tradeData.map(pt =>
             pt.signal.toLowerCase().startsWith("buy") ? "green" : "red"
           );
         }
       }
-      btcPriceChart.update();
+      window.btcPriceChart.update();
     } else {
       const ctx2 = document.getElementById("btcPriceChart").getContext("2d");
       let tradeData = [];
       if (data.trade_dates && data.trade_prices && data.trade_signals) {
-        for (let i = 0; i < data.trade_dates.length; i++) {
-          tradeData.push({
-            x: data.trade_dates[i],
-            y: data.trade_prices[i],
-            signal: data.trade_signals[i]
-          });
-        }
+        tradeData = data.trade_dates.map((date, i) => ({
+          x: date,
+          y: data.trade_prices[i],
+          signal: data.trade_signals[i]
+        }));
       }
-      btcPriceChart = new Chart(ctx2, {
+      window.btcPriceChart = new Chart(ctx2, {
         type: "line",
         data: {
           labels: data.dates,
@@ -265,15 +251,15 @@ document.addEventListener("DOMContentLoaded", function() {
         }
       });
     }
-
+  
     // Loss Chart
-    if (lossChart) {
-      lossChart.data.labels = data.losses.map((_, i) => i + 1);
-      lossChart.data.datasets[0].data = data.losses;
-      lossChart.update();
+    if (window.lossChart && window.lossChart.data) {
+      window.lossChart.data.labels = data.losses.map((_, i) => i + 1);
+      window.lossChart.data.datasets[0].data = data.losses;
+      window.lossChart.update();
     } else {
       const ctx3 = document.getElementById("lossChart").getContext("2d");
-      lossChart = new Chart(ctx3, {
+      window.lossChart = new Chart(ctx3, {
         type: "line",
         data: {
           labels: data.losses.map((_, i) => i + 1),
@@ -288,8 +274,8 @@ document.addEventListener("DOMContentLoaded", function() {
       });
     }
   }
+  
 
-  // === Persistent Performance History Chart ===
   function fetchAndUpdatePerformanceHistory() {
     fetch("/agent_performance")
       .then(response => response.json())
@@ -326,7 +312,6 @@ document.addEventListener("DOMContentLoaded", function() {
       .catch(err => console.error("Error fetching performance history:", err));
   }
 
-  // === Live Logs Updates ===
   function updateLiveActions(logs) {
     if (!simulationRunning) return;
     const liveActionsDiv = $("#liveActions");
@@ -337,7 +322,7 @@ document.addEventListener("DOMContentLoaded", function() {
     liveActionsDiv.scrollTop(liveActionsDiv.prop("scrollHeight"));
   }
 
-  // === Simulation Start/Stop Button Handler ===
+  // Simulation start/stop handler
   startButton.addEventListener("click", function() {
     if (!simulationRunning) {
       $("#liveActions").empty();
@@ -349,7 +334,6 @@ document.addEventListener("DOMContentLoaded", function() {
           startButton.textContent = "Stop";
           startButton.classList.remove("btn-primary");
           startButton.classList.add("btn-danger");
-          // Hide the Stop button during initialization.
           startButton.style.display = "none";
           $parametersCard.slideUp(300);
           $resultsCard.hide();
@@ -375,30 +359,28 @@ document.addEventListener("DOMContentLoaded", function() {
     } else {
       simulationRunning = false;
       localStorage.setItem("simulationRunning", "false");
-      // Instead of hiding the button, disable it during cooldown.
       startButton.disabled = true;
-    
       if (resultsInterval) { clearInterval(resultsInterval); resultsInterval = null; }
       if (logsInterval) { clearInterval(logsInterval); logsInterval = null; }
       $("#liveActions").empty();
-      if (btcPriceChart) { btcPriceChart.destroy(); btcPriceChart = null; }
-      if (equityChart) { equityChart.destroy(); equityChart = null; }
-      if (lossChart) { lossChart.destroy(); lossChart = null; }
+      if (window.btcPriceChart) { window.btcPriceChart.destroy(); window.btcPriceChart = null; }
+      if (window.equityChart) { window.equityChart.destroy(); window.equityChart = null; }
+      if (window.lossChart) { window.lossChart.destroy(); window.lossChart = null; }
       fetch("/stop_simulation", { method: "POST" });
       $parametersCard.slideDown(300);
       $resultsCard.slideUp(300);
-      $logsCard.slideUp(300).promise().done(function() {
+      $logsCard.slideUp(300, function() {
           startButton.textContent = "Start";
           startButton.classList.remove("btn-danger");
           startButton.classList.add("btn-primary");
           simulationStatus.textContent = "";
           resetAgentBtn.style.display = "none";
           waitForSimulationStop();
-  });
+      });
     }
   });
 
-  // === Reset (Delete Agent) Button Handler ===
+  // Reset agent handler
   let resetInProgress = false;
   resetAgentBtn.addEventListener("click", function() {
     if (resetInProgress) return;
@@ -444,7 +426,6 @@ document.addEventListener("DOMContentLoaded", function() {
     }
   });
 
-  // === On Page Load: Update UI Based on Simulation State ===
   if (simulationRunning) {
     startButton.textContent = "Stop";
     startButton.classList.remove("btn-primary");
@@ -463,9 +444,7 @@ document.addEventListener("DOMContentLoaded", function() {
           startButton.style.display = "inline-block";
         }
       })
-      .catch(err => {
-        console.error("Error fetching initial logs:", err);
-      })
+      .catch(err => console.error("Error fetching initial logs:", err))
       .finally(() => {
         fetchAndUpdatePerformanceHistory();
         pollResults();
@@ -478,4 +457,6 @@ document.addEventListener("DOMContentLoaded", function() {
     $parametersCard.show();
     resetAgentBtn.style.display = "none";
   }
+
+  initializeTheme();
 });

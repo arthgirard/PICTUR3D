@@ -1,9 +1,12 @@
+# bot.py
+
 import time
 import json
 import logging
 import datetime
 import numpy as np
 import pandas as pd
+from typing import Any, Optional, Dict, List
 
 from trading.data_handler import DataHandler
 from trading.sentiment import GDELTNewsClient, SentimentAnalyzer
@@ -12,8 +15,8 @@ from trading.api_clients import PaperTradingClient, KrakenClient
 from config import INITIAL_BALANCE, STOP_LOSS_PCT, TAKE_PROFIT_PCT, DEFAULT_START_DATE, DEFAULT_END_DATE
 
 class TradingBot:
-    def __init__(self, mode="backtest", device="cpu", stop_loss_pct=0.05, take_profit_pct=0.10,
-                 start_date="2020-01-01", end_date=None):
+    def __init__(self, mode: str = "backtest", device: str = "cpu", stop_loss_pct: float = STOP_LOSS_PCT, take_profit_pct: float = TAKE_PROFIT_PCT,
+                 start_date: str = DEFAULT_START_DATE, end_date: Optional[str] = DEFAULT_END_DATE) -> None:
         self.mode = mode
         self.device = device
         self.data_handler = DataHandler(start_date=start_date, end_date=end_date)
@@ -21,20 +24,17 @@ class TradingBot:
         self.sentiment_analyzer = SentimentAnalyzer(device=self.device)
         self.feature_cols = ['SMA_20', 'RSI', 'MACD', 'Signal', 'Middle_Band', 
                              'Upper_Band', 'Lower_Band', 'Volatility', 'Volume']
-        # The input dimension adds one extra feature for sentiment score.
-        self.input_dim = len(self.feature_cols) + 1
-        # Define action space: 0: hold, 1: buy_25, 2: buy_50, 3: sell_25, 4: sell_50.
-        self.action_space = {0: "hold", 1: "buy_25", 2: "buy_50", 3: "sell_25", 4: "sell_50"}
+        self.input_dim = len(self.feature_cols) + 1  # extra sentiment score
+        self.action_space: Dict[int, str] = {0: "hold", 1: "buy_25", 2: "buy_50", 3: "sell_25", 4: "sell_50"}
         self.agent = TradingAgent(input_dim=self.input_dim, action_dim=len(self.action_space), device=self.device)
         self.initial_balance = INITIAL_BALANCE
         self.current_balance = self.initial_balance
         self.current_position = 0.0
         self.trading_fee = 0.001
-        self.stop_loss_pct = STOP_LOSS_PCT
-        self.take_profit_pct = TAKE_PROFIT_PCT
-        self.avg_entry_price = None
-        # Cache for sentiment scores per date to avoid recomputation during backtesting.
-        self.sentiment_cache = {}
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
+        self.avg_entry_price: Optional[float] = None
+        self.sentiment_cache: Dict[str, float] = {}
         if self.mode == "paper":
             self.paper_client = PaperTradingClient(initial_balance=self.initial_balance)
         if self.mode == "live":
@@ -43,14 +43,12 @@ class TradingBot:
                 raise ValueError("KRAKEN_API_KEY and/or KRAKEN_API_SECRET not found in environment variables.")
             self.kraken_client = KrakenClient(api_key=KRAKEN_API_KEY, api_secret=KRAKEN_API_SECRET)
 
-    def _get_features(self, row):
+    def _get_features(self, row: pd.Series) -> np.ndarray:
         tech_features = row[self.feature_cols].values.astype(np.float32)
-        date_val = row['Date']
-        if hasattr(date_val, 'iloc'):
+        date_val = pd.to_datetime(row['Date'])
+        if isinstance(date_val, pd.Series):
             date_val = date_val.iloc[0]
-        date_val = pd.to_datetime(date_val)
         date_str = date_val.strftime("%Y-%m-%d")
-        # Use cached sentiment score if available.
         if date_str in self.sentiment_cache:
             sentiment_score = self.sentiment_cache[date_str]
         else:
@@ -63,7 +61,8 @@ class TradingBot:
         features = np.concatenate([tech_features, np.array([sentiment_score], dtype=np.float32)])
         return features
 
-    def _update_avg_entry_price(self, trade_price, btc_amount):
+
+    def _update_avg_entry_price(self, trade_price: float, btc_amount: float) -> None:
         if self.avg_entry_price is None or self.current_position == 0:
             self.avg_entry_price = trade_price
         else:
@@ -71,17 +70,20 @@ class TradingBot:
             new_total_cost = total_cost + (trade_price * btc_amount)
             self.avg_entry_price = new_total_cost / (self.current_position + btc_amount)
 
-    def _check_risk_management(self, current_price):
+    def _check_risk_management(self, current_price: float) -> Optional[str]:
         if self.current_position > 0 and self.avg_entry_price is not None:
             if current_price <= self.avg_entry_price * (1 - self.stop_loss_pct):
-                logging.info("Stop-loss triggered: current price %.2f below %.2f", current_price, self.avg_entry_price * (1 - self.stop_loss_pct))
+                logging.info(f"Stop-loss triggered: current price {current_price:.2f} below {self.avg_entry_price * (1 - self.stop_loss_pct):.2f}")
                 return "sell_all"
             if current_price >= self.avg_entry_price * (1 + self.take_profit_pct):
-                logging.info("Take-profit triggered: current price %.2f above %.2f", current_price, self.avg_entry_price * (1 + self.take_profit_pct))
+                logging.info(f"Take-profit triggered: current price {current_price:.2f} above {self.avg_entry_price * (1 + self.take_profit_pct):.2f}")
                 return "sell_all"
         return None
 
-    def _execute_trade(self, action, price, mode_client):
+    def _execute_trade(self, action: Any, price: float, mode_client: str) -> None:
+        """
+        Execute a trade based on the action. Consolidates trade execution logic for backtest, paper, and live modes.
+        """
         price = float(price)
         risk_signal = self._check_risk_management(price)
         trade_action = risk_signal if risk_signal == "sell_all" else self.action_space.get(action, "hold")
@@ -93,7 +95,7 @@ class TradingBot:
                 self.current_balance -= trade_amount_usd
                 self.current_position += btc_bought
                 self._update_avg_entry_price(price, btc_bought)
-                logging.info("Backtest BUY: Spent %.2f USD to buy %.6f BTC at %.2f", trade_amount_usd, btc_bought, price)
+                logging.info(f"Backtest BUY: Spent {trade_amount_usd:.2f} USD to buy {btc_bought:.6f} BTC at {price:.2f}")
             elif trade_action.startswith("sell"):
                 trade_percentage = 1.0 if trade_action == "sell_all" else (0.25 if "25" in trade_action else 0.50)
                 if self.current_position > 0:
@@ -103,7 +105,7 @@ class TradingBot:
                     self.current_position -= btc_to_sell
                     if trade_percentage == 1.0:
                         self.avg_entry_price = None
-                    logging.info("Backtest SELL: Sold %.6f BTC for %.2f USD at %.2f", btc_to_sell, proceeds, price)
+                    logging.info(f"Backtest SELL: Sold {btc_to_sell:.6f} BTC for {proceeds:.2f} USD at {price:.2f}")
         elif mode_client == "paper":
             self.paper_client.place_order(trade_action.split('_')[0], 0.25 if "25" in trade_action else (0.50 if "50" in trade_action else 1.0), price)
         elif mode_client == "live":
@@ -120,11 +122,11 @@ class TradingBot:
             else:
                 volume = 0
             if volume > 0:
-                result = self.kraken_client.place_order(pair=pair, ordertype="market", type_side=trade_action.split('_')[0], volume=str(volume))
+                result = self.kraken_client.place_order(pair=pair, ordertype="market", type_side=trade_action.split('_')[0], volume=volume)
                 if result:
-                    logging.info("Live trading order executed: %s", result)
+                    logging.info(f"Live trading order executed: {result}")
 
-    def run_backtest(self, web_mode=False, stop_event=None):
+    def run_backtest(self, web_mode: bool = False, stop_event: Optional[Any] = None) -> Optional[Dict[str, Any]]:
         data = self.data_handler.download_data()
         asset_values, dates = [], []
         losses = []
@@ -136,42 +138,32 @@ class TradingBot:
     
         for idx, row in data.iterrows():
             if stop_event is not None and stop_event.is_set():
-                logging.info("Stop event detected. Exiting simulation loop at iteration %d.", idx)
+                logging.info(f"Stop event detected. Exiting simulation loop at iteration {idx}.")
                 break
     
             features = self._get_features(row)
             action_idx = self.agent.select_action(features)
-            price = float(row['Close'].iloc[0]) if hasattr(row['Close'], 'iloc') else float(row['Close'])
+            price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price)
             action_used = forced_signal if forced_signal == "sell_all" else self.action_space.get(action_idx, "hold")
             if action_used != "hold":
-                date_val = row['Date']
-                if hasattr(date_val, 'iloc'):
-                    date_val = date_val.iloc[0]
-                date_val = pd.to_datetime(date_val)
+                date_val = pd.to_datetime(row['Date'])
                 trade_dates.append(date_val.strftime("%Y-%m-%d"))
                 trade_prices.append(price)
                 trade_signals.append(action_used)
             self._execute_trade(action_idx if forced_signal is None else forced_signal, price, mode_client="backtest")
             total_asset = self.current_balance + self.current_position * price
-            date_overall = row['Date']
-            if hasattr(date_overall, 'iloc'):
-                date_overall = date_overall.iloc[0]
-            date_overall = pd.to_datetime(date_overall)
-            dates.append(date_overall.strftime("%Y-%m-%d"))
+            dates.append(pd.to_datetime(row['Date']).strftime("%Y-%m-%d"))
             asset_values.append(total_asset)
             btc_prices.append(price)
-            if idx > 0:
-                reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2]
-                if forced_signal is None and self.action_space.get(action_idx, "hold") != "hold":
-                    reward -= 0.001
-            else:
-                reward = 0
+            reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
+            if forced_signal is None and self.action_space.get(action_idx, "hold") != "hold":
+                reward -= 0.001
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
             loss = self.agent.train(batch_size=64)
             if loss is not None:
                 losses.append(loss)
-            logging.info("Date: %s, Action: %s, Total Asset: %.2f", date_overall.strftime("%Y-%m-%d"), action_used, total_asset)
+            logging.info(f"Date: {dates[-1]}, Action: {action_used}, Total Asset: {total_asset:.2f}")
     
         final_asset = asset_values[-1] if asset_values else self.initial_balance
         net_profit = final_asset - self.initial_balance
@@ -206,7 +198,7 @@ class TradingBot:
                 json.dump(performance_metrics, f)
             logging.info("Performance metrics saved.")
         except Exception as e:
-            logging.error("Error saving performance metrics: %s", e)
+            logging.error(f"Error saving performance metrics: {e}")
     
         if web_mode:
             return performance_metrics
@@ -231,7 +223,7 @@ class TradingBot:
             plt.show()
             self.save_state()
 
-    def run_paper_trading(self):
+    def run_paper_trading(self) -> None:
         logging.info("Starting paper trading simulation...")
         data = self.data_handler.download_data()
         self.paper_client.balance = self.initial_balance
@@ -240,37 +232,37 @@ class TradingBot:
         for idx, row in data.iterrows():
             features = self._get_features(row)
             action_idx = self.agent.select_action(features)
-            price = float(row['Close'].iloc[0]) if hasattr(row['Close'], 'iloc') else float(row['Close'])
+            price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price)
             action_used = forced_signal if forced_signal == "sell_all" else self.action_space.get(action_idx, "hold")
             self._execute_trade(action_idx if forced_signal is None else forced_signal, price, mode_client="paper")
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, 0, features, False)
             loss = self.agent.train(batch_size=64)
             if loss:
-                logging.info("Iteration %d, Loss: %.6f", idx, loss)
+                logging.info(f"Iteration {idx}, Loss: {loss:.6f}")
             time.sleep(0.1)
         self.save_state()
 
-    def run_live_trading(self):
+    def run_live_trading(self) -> None:
         logging.info("Starting live trading mode...")
         data = self.data_handler.download_data()
         self.avg_entry_price = None
         for idx, row in data.iterrows():
             features = self._get_features(row)
             action_idx = self.agent.select_action(features)
-            price = float(row['Close'].iloc[0]) if hasattr(row['Close'], 'iloc') else float(row['Close'])
+            price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price)
             action_used = forced_signal if forced_signal == "sell_all" else self.action_space.get(action_idx, "hold")
             self._execute_trade(action_idx if forced_signal is None else forced_signal, price, mode_client="live")
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, 0, features, False)
             loss = self.agent.train(batch_size=64)
             if loss:
-                logging.info("Iteration %d, Loss: %.6f", idx, loss)
+                logging.info(f"Iteration {idx}, Loss: {loss:.6f}")
             time.sleep(1)
         self.save_state()
 
-    def save_state(self):
+    def save_state(self) -> None:
         self.agent.save()
 
-    def load_state(self):
+    def load_state(self) -> None:
         self.agent.load()
