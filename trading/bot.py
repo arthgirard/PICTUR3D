@@ -1,6 +1,7 @@
 import time
 import json
 import logging
+import datetime
 import numpy as np
 import pandas as pd
 
@@ -12,7 +13,7 @@ from config import INITIAL_BALANCE, STOP_LOSS_PCT, TAKE_PROFIT_PCT, DEFAULT_STAR
 
 class TradingBot:
     def __init__(self, mode="backtest", device="cpu", stop_loss_pct=0.05, take_profit_pct=0.10,
-             start_date="2020-01-01", end_date=None):
+                 start_date="2020-01-01", end_date=None):
         self.mode = mode
         self.device = device
         self.data_handler = DataHandler(start_date=start_date, end_date=end_date)
@@ -32,6 +33,8 @@ class TradingBot:
         self.stop_loss_pct = STOP_LOSS_PCT
         self.take_profit_pct = TAKE_PROFIT_PCT
         self.avg_entry_price = None
+        # Cache for sentiment scores per date to avoid recomputation during backtesting.
+        self.sentiment_cache = {}
         if self.mode == "paper":
             self.paper_client = PaperTradingClient(initial_balance=self.initial_balance)
         if self.mode == "live":
@@ -43,16 +46,20 @@ class TradingBot:
     def _get_features(self, row):
         tech_features = row[self.feature_cols].values.astype(np.float32)
         date_val = row['Date']
-        # Ensure date_val is a proper scalar datetime (if it's a Series, extract the first element)
         if hasattr(date_val, 'iloc'):
             date_val = date_val.iloc[0]
         date_val = pd.to_datetime(date_val)
-        # Get headlines based on mode and date
-        if self.mode in ["backtest", "paper"]:
-            headlines = self.news_client.fetch_headlines(query="bitcoin", page_size=5, date=date_val)
+        date_str = date_val.strftime("%Y-%m-%d")
+        # Use cached sentiment score if available.
+        if date_str in self.sentiment_cache:
+            sentiment_score = self.sentiment_cache[date_str]
         else:
-            headlines = self.news_client.fetch_headlines(query="bitcoin", page_size=5)
-        sentiment_score = self.sentiment_analyzer.compute_sentiment(headlines)
+            if self.mode in ["backtest", "paper"]:
+                headlines = self.news_client.fetch_headlines(query="bitcoin", page_size=5, date=date_val)
+            else:
+                headlines = self.news_client.fetch_headlines(query="bitcoin", page_size=5)
+            sentiment_score = self.sentiment_analyzer.compute_sentiment(headlines)
+            self.sentiment_cache[date_str] = sentiment_score
         features = np.concatenate([tech_features, np.array([sentiment_score], dtype=np.float32)])
         return features
 
@@ -128,14 +135,12 @@ class TradingBot:
         self.avg_entry_price = None
     
         for idx, row in data.iterrows():
-            # Check if a stop event is set; if so, break out of the loop.
             if stop_event is not None and stop_event.is_set():
                 logging.info("Stop event detected. Exiting simulation loop at iteration %d.", idx)
                 break
     
             features = self._get_features(row)
             action_idx = self.agent.select_action(features)
-            # Use .iloc[0] for price if needed.
             price = float(row['Close'].iloc[0]) if hasattr(row['Close'], 'iloc') else float(row['Close'])
             forced_signal = self._check_risk_management(price)
             action_used = forced_signal if forced_signal == "sell_all" else self.action_space.get(action_idx, "hold")
@@ -168,7 +173,6 @@ class TradingBot:
                 losses.append(loss)
             logging.info("Date: %s, Action: %s, Total Asset: %.2f", date_overall.strftime("%Y-%m-%d"), action_used, total_asset)
     
-        # Compute performance metrics.
         final_asset = asset_values[-1] if asset_values else self.initial_balance
         net_profit = final_asset - self.initial_balance
         percentage_return = (net_profit / self.initial_balance) * 100
@@ -226,7 +230,6 @@ class TradingBot:
             plt.tight_layout()
             plt.show()
             self.save_state()
-
 
     def run_paper_trading(self):
         logging.info("Starting paper trading simulation...")

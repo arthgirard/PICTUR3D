@@ -11,7 +11,6 @@ from multiprocessing import Process, Manager
 app = Flask(__name__)
 
 # Global variables for simulation state.
-# They will be initialized in the main block.
 simulation_results = None   # Shared dict for simulation results.
 simulation_logs = None      # Shared list for live logs.
 stop_event = None           # Shared stop event.
@@ -137,7 +136,9 @@ def run_backtest_simulation(bot, stop_evt, sim_results, sim_logs):
                 "max_drawdown": 0,  # Optionally compute incrementally.
                 "finished": False
             })
-        time.sleep(0.2)
+        # Only sleep if not in backtest mode.
+        if bot.mode != "backtest":
+            time.sleep(0.2)
     
     final_asset = asset_values[-1] if asset_values else bot.initial_balance
     net_profit = final_asset - bot.initial_balance
@@ -264,7 +265,6 @@ def agent_performance():
 @app.route("/delete_agent", methods=["POST"])
 def delete_agent():
     global simulation_process
-    # Simulate clicking the Stop button.
     stop_simulation_logic()
     save_performance_metrics(dict(simulation_results))
     
@@ -290,7 +290,6 @@ def clear_logs():
 if __name__ == "__main__":
     from multiprocessing import freeze_support
     freeze_support()  # For Windows support.
-    # Initialize shared objects using the Manager.
     manager = Manager()
     simulation_results = manager.dict()
     simulation_logs = manager.list()
