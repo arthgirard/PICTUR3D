@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
+from deep_translator import GoogleTranslator  # Synchronous translator
 
 class GDELTNewsClient:
     def __init__(self, base_url="https://api.gdeltproject.org/api/v2/doc/doc"):
@@ -61,18 +62,30 @@ class GDELTNewsClient:
 class SentimentAnalyzer:
     def __init__(self, model_name="ProsusAI/finbert", device="cpu"):
         self.device = device
-        logging.info("Loading FinBERT model for sentiment analysis...")
+        logging.info("Loading FinBERT model for financial sentiment analysis (%s)...", model_name)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_name).to(self.device)
+        # Use synchronous Google Translator via deep_translator.
+        self.translator = GoogleTranslator(source='auto', target='en')
 
     def compute_sentiment(self, headlines):
-        scores = []
+        translations = []
         for headline in headlines:
-            inputs = self.tokenizer(headline, return_tensors="pt", truncation=True).to(self.device)
+            try:
+                translated_text = self.translator.translate(headline)
+                translations.append(translated_text)
+            except Exception as e:
+                logging.error("Error translating headline '%s': %s", headline, e)
+                # Fallback: use the original headline if translation fails.
+                translations.append(headline)
+        
+        scores = []
+        for translated_text in translations:
+            inputs = self.tokenizer(translated_text, return_tensors="pt", truncation=True).to(self.device)
             with torch.no_grad():
                 outputs = self.model(**inputs)
             sentiment = torch.softmax(outputs.logits, dim=-1)
-            # Using the difference between positive and negative sentiment scores:
+            # FinBERT outputs [negative, neutral, positive]; compute score as (positive - negative).
             score = sentiment[0, 2].item() - sentiment[0, 0].item()
             scores.append(score)
         avg_score = np.mean(scores)
