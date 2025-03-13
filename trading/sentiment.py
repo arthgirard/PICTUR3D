@@ -1,4 +1,5 @@
 import logging
+import concurrent.futures
 import certifi
 import requests
 import pandas as pd
@@ -69,16 +70,19 @@ class SentimentAnalyzer:
         self.translator = GoogleTranslator(source='auto', target='en')
 
     def compute_sentiment(self, headlines):
+        # Translate headlines concurrently using ThreadPoolExecutor.
         translations = []
-        for headline in headlines:
-            try:
-                translated_text = self.translator.translate(headline)
-                translations.append(translated_text)
-            except Exception as e:
-                logging.error("Error translating headline '%s': %s", headline, e)
-                # Fallback: use the original headline if translation fails.
-                translations.append(headline)
-        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_headline = {executor.submit(self.translator.translate, headline): headline for headline in headlines}
+            for future in concurrent.futures.as_completed(future_to_headline):
+                headline = future_to_headline[future]
+                try:
+                    translated_text = future.result()
+                    translations.append(translated_text)
+                except Exception as e:
+                    logging.error("Error translating headline '%s': %s", headline, e)
+                    translations.append(headline)  # Fallback to original
+
         scores = []
         for translated_text in translations:
             inputs = self.tokenizer(translated_text, return_tensors="pt", truncation=True).to(self.device)
