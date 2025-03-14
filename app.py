@@ -166,6 +166,18 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
         dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in dates]
         trade_dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in trade_dates]
         
+        # Equity Curve Chart.
+        fig, ax = plt.subplots()
+        ax.plot(dates_dt, asset_values, label="Equity Curve (USD)")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Total Asset (USD)")
+        ax.set_title("Equity Curve")
+        ax.legend()
+        fig.autofmt_xdate()
+        equity_path = os.path.join(simulation_folder, "equity_chart.png")
+        fig.savefig(equity_path)
+        plt.close(fig)
+        
         # BTC Price with Trade Markers Chart.
         fig, ax = plt.subplots()
         ax.plot(dates_dt, btc_prices, label="BTC Price (USD)", color="blue")
