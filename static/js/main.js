@@ -242,7 +242,7 @@ document.addEventListener("DOMContentLoaded", function() {
           window.btcPriceChart.data.datasets.push({
             label: "Trades",
             data: tradeData,
-            type: "scatter",
+            type: "line",
             parsing: { xAxisKey: "x", yAxisKey: "y" },
             pointRadius: 5,
             pointBackgroundColor: tradeData.map(pt =>
@@ -323,7 +323,12 @@ document.addEventListener("DOMContentLoaded", function() {
             fill: false
           }]
         },
-        options: { responsive: true }
+        options: {decimation: {
+          enabled: true,
+          algorithm: 'lttb',
+          samples: 500       // Set the number of points to display.
+        },
+        responsive: true }
       });
     }
   }
