@@ -10,6 +10,8 @@ from flask import Flask, render_template, request, jsonify
 from trading.bot import TradingBot
 from multiprocessing import Process
 from typing import Any, Dict, Optional
+import matplotlib
+matplotlib.use('Agg')
 
 app = Flask(__name__)
 
