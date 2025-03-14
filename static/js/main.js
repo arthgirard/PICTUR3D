@@ -2,6 +2,7 @@
 document.addEventListener("DOMContentLoaded", function() {
   // Global variables
   let simulationFinishedUI = false;
+  let currentIteration = 0;
 
   // Theme Toggle and Favicon Inversion Module
   const themeToggle = document.getElementById("themeToggle");
@@ -144,22 +145,35 @@ document.addEventListener("DOMContentLoaded", function() {
       .then(response => response.json())
       .then(data => {
         updateCharts(data);
-        if (firstLogReceived) {
-          simulationStatus.innerHTML = `<strong>Balance:</strong> $${data.final_balance.toFixed(2)} | <strong>Trades:</strong> ${data.num_trades} | <strong>Return:</strong> ${data.percentage_return.toFixed(2)}%`;
+        let finalBalance = parseFloat(data.final_balance) || 0;
+        let iteration = data.iteration || 1;
+        const numSimulationsValue = parseInt(document.getElementById("numSimulations").value) || 1;
+        
+        // Update performance graph if a new iteration is detected.
+        if (iteration > currentIteration) {
+          currentIteration = iteration;
+          fetchAndUpdatePerformanceHistory();
         }
-        // If simulation is finished and not yet finalized in UI:
+        
+        if (firstLogReceived) {
+          simulationStatus.innerHTML = `<strong>Simulation ${iteration}/${numSimulationsValue}</strong> | ` +
+            `<strong>Balance:</strong> $${finalBalance.toFixed(2)} | ` +
+            `<strong>Trades:</strong> ${data.num_trades} | ` +
+            `<strong>Return:</strong> ${parseFloat(data.percentage_return) ? parseFloat(data.percentage_return).toFixed(2) : "0"}%`;
+        }
+        
         if (data.finished && !simulationFinishedUI) {
           simulationFinishedUI = true;
           stopSimulationUI();
-          console.info("Simulation finalized automatically via final date.");
+          console.info("Simulation finalized automatically via final iteration.");
         }
       })
       .catch(err => {
         console.error("Error fetching results:", err);
         simulationStatus.textContent = "Error updating simulation status.";
       });
-  }
-
+  }  
+  
   function pollResults() {
     fetchResults();
     resultsInterval = setInterval(fetchResults, 1000);
@@ -363,45 +377,56 @@ document.addEventListener("DOMContentLoaded", function() {
 
   // Simulation start/stop handler
   startButton.addEventListener("click", function() {
-  if (!simulationRunning) {
-    // Reset the auto-stop flag for new simulation runs.
-    simulationFinishedUI = false;
-    
-    $("#liveActions").empty();
-    clearPreviousData();
-    fetch("/clear_logs", { method: "POST" })
-      .then(() => {
-        simulationRunning = true;
-        localStorage.setItem("simulationRunning", "true");
-        startButton.textContent = "Stop";
-        startButton.classList.remove("btn-primary");
-        startButton.classList.add("btn-danger");
-        startButton.style.display = "none";
-        $parametersCard.slideUp(300);
-        $resultsCard.hide();
-        $logsCard.hide();
-        simulationStatus.innerHTML = "Initializing agent <i class='fas fa-spinner fa-spin'></i>";
-        const mode = modeSelect.value;
-        const startDate = startDateInput.value;
-        const endDate = endDateInput.value;
-        const stopLoss = stopLossInput.value;
-        const takeProfit = takeProfitInput.value;
-        fetch("/start_simulation", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: mode, start_date: startDate, end_date: endDate, stop_loss_pct: stopLoss, take_profit_pct: takeProfit })
-        })
-        .then(response => response.json())
-        .then(data => {
-          pollResults();
-          pollLiveLogs();
-          fetchAndUpdatePerformanceHistory();
+    if (!simulationRunning) {
+      // Reset flags for new simulation
+      simulationFinishedUI = false;
+      
+      $("#liveActions").empty();
+      clearPreviousData();
+      fetch("/clear_logs", { method: "POST" })
+        .then(() => {
+          simulationRunning = true;
+          localStorage.setItem("simulationRunning", "true");
+          startButton.textContent = "Stop";
+          startButton.classList.remove("btn-primary");
+          startButton.classList.add("btn-danger");
+          startButton.style.display = "none";
+          $parametersCard.slideUp(300);
+          $resultsCard.hide();
+          $logsCard.hide();
+          simulationStatus.innerHTML = "Initializing agent <i class='fas fa-spinner fa-spin'></i>";
+          const mode = modeSelect.value;
+          const startDate = startDateInput.value;
+          const endDate = endDateInput.value;
+          const stopLoss = stopLossInput.value;
+          const takeProfit = takeProfitInput.value;
+          // NEW: Read the new parameters.
+          const numSimulations = document.getElementById("numSimulations").value;
+          const saveGraphs = document.getElementById("enableGraphSaving").checked;
+          fetch("/start_simulation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mode: mode,
+              start_date: startDate,
+              end_date: endDate,
+              stop_loss_pct: stopLoss,
+              take_profit_pct: takeProfit,
+              number_of_simulations: numSimulations,
+              save_graphs: saveGraphs
+            })
+          })
+          .then(response => response.json())
+          .then(data => {
+            pollResults();
+            pollLiveLogs();
+            fetchAndUpdatePerformanceHistory();
+          });
         });
-      });
-  } else {
-    stopSimulationUI();
-  }
-});
+    } else {
+      stopSimulationUI();
+    }
+  });
 
   // Reset agent handler
   let resetInProgress = false;
