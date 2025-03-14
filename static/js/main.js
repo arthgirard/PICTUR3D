@@ -1,5 +1,8 @@
 /* main.js */
 document.addEventListener("DOMContentLoaded", function() {
+  // Global variables
+  let simulationFinishedUI = false;
+
   // Theme Toggle and Favicon Inversion Module
   const themeToggle = document.getElementById("themeToggle");
   const body = document.body;
@@ -106,6 +109,36 @@ document.addEventListener("DOMContentLoaded", function() {
     lastKnownLogsCount = 0;
   }
 
+  // Extract the stop simulation UI logic into its own function.
+  function stopSimulationUI() {
+    simulationRunning = false;
+    localStorage.setItem("simulationRunning", "false");
+    startButton.disabled = true;
+  
+    if (resultsInterval) { clearInterval(resultsInterval); resultsInterval = null; }
+    if (logsInterval) { clearInterval(logsInterval); logsInterval = null; }
+    $("#liveActions").empty();
+    if (window.btcPriceChart) { window.btcPriceChart.destroy(); window.btcPriceChart = null; }
+    if (window.equityChart) { window.equityChart.destroy(); window.equityChart = null; }
+    if (window.lossChart) { window.lossChart.destroy(); window.lossChart = null; }
+    
+    // Signal the backend to stop the simulation.
+    fetch("/stop_simulation", { method: "POST" });
+    
+    // Adjust UI: show parameters card, hide results and logs.
+    $parametersCard.slideDown(300);
+    $resultsCard.slideUp(300);
+    $logsCard.slideUp(300).promise().done(function() {
+      startButton.textContent = "Start";
+      startButton.classList.remove("btn-danger");
+      startButton.classList.add("btn-primary");
+      simulationStatus.textContent = "";
+      resetAgentBtn.style.display = "none";
+      waitForSimulationStop();
+      startButton.disabled = false;
+    });
+  }
+
   function fetchResults() {
     fetch("/results")
       .then(response => response.json())
@@ -113,6 +146,12 @@ document.addEventListener("DOMContentLoaded", function() {
         updateCharts(data);
         if (firstLogReceived) {
           simulationStatus.innerHTML = `<strong>Balance:</strong> $${data.final_balance.toFixed(2)} | <strong>Trades:</strong> ${data.num_trades} | <strong>Return:</strong> ${data.percentage_return.toFixed(2)}%`;
+        }
+        // If simulation is finished and not yet finalized in UI:
+        if (data.finished && !simulationFinishedUI) {
+          simulationFinishedUI = true;
+          stopSimulationUI();
+          console.info("Simulation finalized automatically via final date.");
         }
       })
       .catch(err => {
@@ -324,61 +363,45 @@ document.addEventListener("DOMContentLoaded", function() {
 
   // Simulation start/stop handler
   startButton.addEventListener("click", function() {
-    if (!simulationRunning) {
-      $("#liveActions").empty();
-      clearPreviousData();
-      fetch("/clear_logs", { method: "POST" })
-        .then(() => {
-          simulationRunning = true;
-          localStorage.setItem("simulationRunning", "true");
-          startButton.textContent = "Stop";
-          startButton.classList.remove("btn-primary");
-          startButton.classList.add("btn-danger");
-          startButton.style.display = "none";
-          $parametersCard.slideUp(300);
-          $resultsCard.hide();
-          $logsCard.hide();
-          simulationStatus.innerHTML = "Initializing agent <i class='fas fa-spinner fa-spin'></i>";
-          const mode = modeSelect.value;
-          const startDate = startDateInput.value;
-          const endDate = endDateInput.value;
-          const stopLoss = stopLossInput.value;
-          const takeProfit = takeProfitInput.value;
-          fetch("/start_simulation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode: mode, start_date: startDate, end_date: endDate, stop_loss_pct: stopLoss, take_profit_pct: takeProfit })
-          })
-          .then(response => response.json())
-          .then(data => {
-            pollResults();
-            pollLiveLogs();
-            fetchAndUpdatePerformanceHistory();
-          });
+  if (!simulationRunning) {
+    // Reset the auto-stop flag for new simulation runs.
+    simulationFinishedUI = false;
+    
+    $("#liveActions").empty();
+    clearPreviousData();
+    fetch("/clear_logs", { method: "POST" })
+      .then(() => {
+        simulationRunning = true;
+        localStorage.setItem("simulationRunning", "true");
+        startButton.textContent = "Stop";
+        startButton.classList.remove("btn-primary");
+        startButton.classList.add("btn-danger");
+        startButton.style.display = "none";
+        $parametersCard.slideUp(300);
+        $resultsCard.hide();
+        $logsCard.hide();
+        simulationStatus.innerHTML = "Initializing agent <i class='fas fa-spinner fa-spin'></i>";
+        const mode = modeSelect.value;
+        const startDate = startDateInput.value;
+        const endDate = endDateInput.value;
+        const stopLoss = stopLossInput.value;
+        const takeProfit = takeProfitInput.value;
+        fetch("/start_simulation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: mode, start_date: startDate, end_date: endDate, stop_loss_pct: stopLoss, take_profit_pct: takeProfit })
+        })
+        .then(response => response.json())
+        .then(data => {
+          pollResults();
+          pollLiveLogs();
+          fetchAndUpdatePerformanceHistory();
         });
-    } else {
-      simulationRunning = false;
-      localStorage.setItem("simulationRunning", "false");
-      startButton.disabled = true;
-      if (resultsInterval) { clearInterval(resultsInterval); resultsInterval = null; }
-      if (logsInterval) { clearInterval(logsInterval); logsInterval = null; }
-      $("#liveActions").empty();
-      if (window.btcPriceChart) { window.btcPriceChart.destroy(); window.btcPriceChart = null; }
-      if (window.equityChart) { window.equityChart.destroy(); window.equityChart = null; }
-      if (window.lossChart) { window.lossChart.destroy(); window.lossChart = null; }
-      fetch("/stop_simulation", { method: "POST" });
-      $parametersCard.slideDown(300);
-      $resultsCard.slideUp(300);
-      $logsCard.slideUp(300, function() {
-          startButton.textContent = "Start";
-          startButton.classList.remove("btn-danger");
-          startButton.classList.add("btn-primary");
-          simulationStatus.textContent = "";
-          resetAgentBtn.style.display = "none";
-          waitForSimulationStop();
       });
-    }
-  });
+  } else {
+    stopSimulationUI();
+  }
+});
 
   // Reset agent handler
   let resetInProgress = false;

@@ -9,3 +9,4 @@ certifi
 python-dotenv
 matplotlib
 deep_translator
+openpyxl

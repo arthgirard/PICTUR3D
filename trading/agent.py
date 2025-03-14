@@ -60,26 +60,32 @@ class PrioritizedReplayBuffer:
         self.priorities[self.pos] = max_priority
         self.pos = (self.pos + 1) % self.capacity
 
-    def sample(self, batch_size: int, beta: float = 0.4) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        if len(self.buffer) == self.capacity:
-            priorities = self.priorities
-        else:
-            priorities = self.priorities[:len(self.buffer)]
-        probs = priorities ** self.alpha
-        probs /= probs.sum()
-        indices = np.random.choice(len(self.buffer), batch_size, p=probs)
-        samples = [self.buffer[idx] for idx in indices]
-        total = len(self.buffer)
-        weights = (total * probs[indices]) ** (-beta)
-        weights /= weights.max()
-        weights = np.array(weights, dtype=np.float32)
-        batch = list(zip(*samples))
-        states = np.array(batch[0])
-        actions = np.array(batch[1])
-        rewards = np.array(batch[2])
-        next_states = np.array(batch[3])
-        dones = np.array(batch[4])
-        return states, actions, rewards, next_states, dones, indices, weights
+    def sample(self, batch_size, beta=0.4):
+       if len(self.buffer) == self.capacity:
+           priorities = self.priorities
+       else:
+           priorities = self.priorities[:len(self.buffer)]
+       probs = priorities ** self.alpha
+       probs_sum = probs.sum()
+       # Check for NaN or zero sum and fallback to uniform probabilities
+       if np.isnan(probs_sum) or probs_sum == 0:
+           probs = np.ones_like(probs) / len(probs)
+       else:
+           probs /= probs_sum
+       indices = np.random.choice(len(self.buffer), batch_size, p=probs)
+       samples = [self.buffer[idx] for idx in indices]
+       total = len(self.buffer)
+       weights = (total * probs[indices]) ** (-beta)
+       weights /= weights.max()
+       weights = np.array(weights, dtype=np.float32)
+       batch = list(zip(*samples))
+       states = np.array(batch[0])
+       actions = np.array(batch[1])
+       rewards = np.array(batch[2])
+       next_states = np.array(batch[3])
+       dones = np.array(batch[4])
+       return states, actions, rewards, next_states, dones, indices, weights
+
 
     def update_priorities(self, indices: List[int], priorities: np.ndarray) -> None:
         for idx, priority in zip(indices, priorities):
