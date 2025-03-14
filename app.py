@@ -162,29 +162,19 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
         simulation_folder = os.path.join(root_folder, folder_name)
         os.mkdir(simulation_folder)
         
-        # Convert dates to datetime objects.
+        # Convert main dates and trade dates to datetime objects.
         dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in dates]
-        
-        # Equity Curve Chart.
-        fig, ax = plt.subplots()
-        ax.plot(dates_dt, asset_values, label="Equity Curve (USD)")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Total Asset (USD)")
-        ax.set_title("Equity Curve")
-        ax.legend()
-        fig.autofmt_xdate()
-        equity_path = os.path.join(simulation_folder, "equity_chart.png")
-        fig.savefig(equity_path)
-        plt.close(fig)
+        trade_dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in trade_dates]
         
         # BTC Price with Trade Markers Chart.
         fig, ax = plt.subplots()
         ax.plot(dates_dt, btc_prices, label="BTC Price (USD)", color="blue")
-        for i, d in enumerate(trade_dates):
+        for i, d in enumerate(trade_dates_dt):
+            # Wrap d in a list to avoid resetting converters.
             if trade_signals[i].lower().startswith("buy"):
-                ax.plot(d, trade_prices[i], marker="^", markersize=8, color="green", label="Buy" if i == 0 else "")
+                ax.plot([d], [trade_prices[i]], marker="^", markersize=8, color="green", label="Buy" if i == 0 else "")
             elif trade_signals[i].lower().startswith("sell"):
-                ax.plot(d, trade_prices[i], marker="v", markersize=8, color="red", label="Sell" if i == 0 else "")
+                ax.plot([d], [trade_prices[i]], marker="v", markersize=8, color="red", label="Sell" if i == 0 else "")
         ax.set_xlabel("Date")
         ax.set_ylabel("BTC Price (USD)")
         ax.set_title("BTC Price with Trades")
