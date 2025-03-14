@@ -13,7 +13,7 @@ Third version (first public version) of a personal algorithmic BTC trading resea
 ## Features
 
 ### Agent
-The bot saves its training weights, replay buffer, and performance. It uses the FinBERT model for sentiment analysis and is currently only debugging-ready for backtesting. Paper trading and live trading need more work.
+This is a DQN algorithm which is able to save its training weights, replay buffer, scaler and performance. It uses the FinBERT model for sentiment analysis based on news pulled from the GDELT project API and is currently only debugging-ready for backtesting. The paper trading and live trading functions need more work, but it is planned to use the Kraken API for live trading.
 
 ### Web interface
-The web interface is pretty minimalistic, presenting live logs and four graphs to measure equity, training loss and bot performance, but also to track where the agent has placed orders on the BTC price.
+The web interface is pretty minimalistic, presenting live logs and four graphs to measure equity, training loss and bot performance, but also to track where the agent has placed orders over the BTC price chart. Some simulation parameters can be modified, like the stop-loss percentage, the take-profit percentage and the dates of the simulation. It is optional, but the code can also save its results to a folder automatically created in the root of the project.
