@@ -102,6 +102,7 @@ body.dark-mode .navbar .nav-link:hover {
 
 body.dark-mode #themeToggle {
   border: 1px solid #ffffff;
+  color: #ffffff;
 }
 
 body.dark-mode #themeToggle:hover {
