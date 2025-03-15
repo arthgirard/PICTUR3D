@@ -221,10 +221,15 @@ document.addEventListener("DOMContentLoaded", function() {
             label: "Equity Curve (USD)",
             data: data.asset_values,
             borderColor: "rgba(75, 192, 192, 1)",
-            fill: false
+            fill: false,
+            pointRadius: 0
           }]
         },
-        options: { responsive: true }
+        options: {decimation: {
+          enabled: true,
+          algorithm: 'lttb',
+          samples: 100       // Set the number of points to display.
+        }, responsive: true }
       });
     }
   
@@ -276,7 +281,8 @@ document.addEventListener("DOMContentLoaded", function() {
             label: "BTC Price (USD)",
             data: data.btc_prices,
             borderColor: "rgba(153, 102, 255, 1)",
-            fill: false
+            fill: false,
+            pointRadius: 0
           },
           {
             label: "Trades",
@@ -290,7 +296,11 @@ document.addEventListener("DOMContentLoaded", function() {
             showLine: false
           }]
         },
-        options: { 
+        options: {decimation: {
+          enabled: true,
+          algorithm: 'lttb',
+          samples: 500       // Set the number of points to display.
+        }, 
           responsive: true,
           scales: {
             x: {
@@ -326,7 +336,7 @@ document.addEventListener("DOMContentLoaded", function() {
         options: {decimation: {
           enabled: true,
           algorithm: 'lttb',
-          samples: 500       // Set the number of points to display.
+          samples: 100       // Set the number of points to display.
         },
         responsive: true }
       });
