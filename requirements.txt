@@ -10,3 +10,4 @@ python-dotenv
 matplotlib
 deep_translator
 openpyxl
+ta-lib
