@@ -3,6 +3,7 @@ document.addEventListener("DOMContentLoaded", function() {
   // Global variables
   let simulationFinishedUI = false;
   let currentIteration = 0;
+  let totalSimulations;
 
   // Theme Toggle and Favicon Inversion Module
   const themeToggle = document.getElementById("themeToggle");
@@ -147,7 +148,8 @@ document.addEventListener("DOMContentLoaded", function() {
         updateCharts(data);
         let finalBalance = parseFloat(data.final_balance) || 0;
         let iteration = data.iteration || 1;
-        const numSimulationsValue = parseInt(document.getElementById("numSimulations").value) || 1;
+        // Use the total simulations from backend data
+        const totalSimulationsValue = data.total_simulations || 1;
         
         // Update performance graph if a new iteration is detected.
         if (iteration > currentIteration) {
@@ -156,7 +158,7 @@ document.addEventListener("DOMContentLoaded", function() {
         }
         
         if (firstLogReceived) {
-          simulationStatus.innerHTML = `<strong>Simulation ${iteration}/${numSimulationsValue}</strong> | ` +
+          simulationStatus.innerHTML = `<strong>Simulation ${iteration}/${totalSimulationsValue}</strong> | ` +
             `<strong>Balance:</strong> $${finalBalance.toFixed(2)} | ` +
             `<strong>Trades:</strong> ${data.num_trades} | ` +
             `<strong>Return:</strong> ${parseFloat(data.percentage_return) ? parseFloat(data.percentage_return).toFixed(2) : "0"}%`;
@@ -172,7 +174,7 @@ document.addEventListener("DOMContentLoaded", function() {
         console.error("Error fetching results:", err);
         simulationStatus.textContent = "Error updating simulation status.";
       });
-  }  
+  }    
   
   function pollResults() {
     fetchResults();
@@ -361,7 +363,7 @@ document.addEventListener("DOMContentLoaded", function() {
             data: {
               labels: labels,
               datasets: [{
-                label: "Bot Performance",
+                label: "Net Profit Over Time",
                 data: netProfits,
                 borderColor: "rgba(75, 192, 192, 1)",
                 fill: false
@@ -395,6 +397,8 @@ document.addEventListener("DOMContentLoaded", function() {
     if (!simulationRunning) {
       // Reset flags for new simulation
       simulationFinishedUI = false;
+      // Capture and store the total number of simulations
+      totalSimulations = parseInt(document.getElementById("numSimulations").value) || 1;
       
       $("#liveActions").empty();
       clearPreviousData();
@@ -427,7 +431,7 @@ document.addEventListener("DOMContentLoaded", function() {
               end_date: endDate,
               stop_loss_pct: stopLoss,
               take_profit_pct: takeProfit,
-              number_of_simulations: numSimulations,
+              number_of_simulations: totalSimulations,
               save_graphs: saveGraphs
             })
           })

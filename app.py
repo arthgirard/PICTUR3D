@@ -242,6 +242,8 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
     
     # Instead of clearing the entire sim_results each iteration, update its keys.
     sim_results["finished"] = False
+    sim_results["total_simulations"] = number_of_simulations
+
     
     for i in range(number_of_simulations):
         if stop_evt.is_set():
