@@ -1,12 +1,7 @@
-# config.py
-
 import os
 
-# General configuration
 INITIAL_BALANCE: float = 10000.0
-STOP_LOSS_PCT: float = 0.05
-TAKE_PROFIT_PCT: float = 0.10
-DEFAULT_START_DATE: str = "2020-03-20"
+DEFAULT_START_DATE: str = "2020-03-16"  # SOL started on this date
 DEFAULT_END_DATE: str = ""
 
 # Kraken API configuration (loaded from environment variables)

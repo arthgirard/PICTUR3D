@@ -1,13 +1,26 @@
 document.addEventListener("DOMContentLoaded", function() {
-  // Global variables
+  const navbar = document.getElementById("navbar");
+  
+  function checkScroll() {
+    if (window.scrollY > 10) {
+      navbar.classList.add("scrolled");
+    } else {
+      navbar.classList.remove("scrolled");
+    }
+  }
+
+  // Initial check
+  checkScroll();
+  
+  // Add scroll event listener
+  window.addEventListener("scroll", checkScroll);
+
   let simulationFinishedUI = false;
   let currentIteration = 0;
   let totalSimulations;
 
-  // Theme Toggle and Favicon Inversion Module
   const themeToggle = document.getElementById("themeToggle");
   const body = document.body;
-  const navbar = document.getElementById("navbar");
   const favicon = document.getElementById("favicon");
 
   function invertFavicon() {
@@ -67,14 +80,11 @@ document.addEventListener("DOMContentLoaded", function() {
     updateThemeIcon();
   });
 
-  // Simulation Controls Module
   const startButton = document.getElementById("startSimulation");
   const modeSelect = document.getElementById("modeSelect");
   const simulationStatus = document.getElementById("simulationStatus");
   const startDateInput = document.getElementById("startDate");
   const endDateInput = document.getElementById("endDate");
-  const stopLossInput = document.getElementById("stopLoss");
-  const takeProfitInput = document.getElementById("takeProfit");
   const resetAgentBtn = document.getElementById("resetAgentBtn");
 
   const $parametersCard = $("#parametersCard");
@@ -404,8 +414,6 @@ document.addEventListener("DOMContentLoaded", function() {
           const mode = modeSelect.value;
           const startDate = startDateInput.value;
           const endDate = endDateInput.value;
-          const stopLoss = stopLossInput.value;
-          const takeProfit = takeProfitInput.value;
           const numSimulations = document.getElementById("numSimulations").value;
           const saveResults = document.getElementById("saveResults").checked;
           fetch("/start_simulation", {
@@ -415,10 +423,8 @@ document.addEventListener("DOMContentLoaded", function() {
               mode: mode,
               start_date: startDate,
               end_date: endDate,
-              stop_loss_pct: stopLoss,
-              take_profit_pct: takeProfit,
               number_of_simulations: totalSimulations,
-              save_results: saveResults
+              save_graphs: saveResults
             })
           })
           .then(response => response.json())
@@ -490,7 +496,6 @@ document.addEventListener("DOMContentLoaded", function() {
         if (data && data.length > 0) {
           $resultsCard.show();
           $logsCard.show();
-          lastKnownLogsCount = data.length;
           firstLogReceived = true;
           updateLiveActions(data);
           startButton.style.display = "inline-block";

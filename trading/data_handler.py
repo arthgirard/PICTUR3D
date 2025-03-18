@@ -9,15 +9,7 @@ class DataHandler:
     def __init__(self, symbol="SOL-USD", start_date="2020-01-01", end_date=None,
                  scaler_path="scaler.pkl", normalize: bool = True):
         """
-        Initialize the DataHandler.
-
-        Parameters:
-            symbol (str): The symbol for which to download historical data.
-                          (Changed from "BTC-USD" to "SOL-USD" for Solana.)
-            start_date (str): Start date in YYYY-MM-DD format.
-            end_date (str): End date in YYYY-MM-DD format. Defaults to today's date.
-            scaler_path (str): File path to store/load normalization parameters.
-            normalize (bool): If True, normalize selected features.
+        Now trading SOL using SOL-USD data.
         """
         self.symbol = symbol
         self.start_date = start_date
@@ -43,7 +35,8 @@ class DataHandler:
     def _compute_indicators(self) -> None:
         df = self.data.copy()
         close = pd.to_numeric(df["Close"].squeeze(), errors='coerce').values.ravel()
-
+        
+        # Core technical indicators
         df["SMA_20"] = talib.SMA(close, timeperiod=20)
         df["RSI"] = talib.RSI(close, timeperiod=14)
         df["EMA_12"] = talib.EMA(close, timeperiod=12)
@@ -51,13 +44,24 @@ class DataHandler:
         df["MACD"] = df["EMA_12"] - df["EMA_26"]
         df["Signal"] = talib.EMA(df["MACD"].values, timeperiod=9)
         
+        # Bollinger Bands
         df["Middle_Band"] = df["SMA_20"]
         df["Std"] = pd.to_numeric(df["Close"].squeeze(), errors='coerce').rolling(window=20).std()
         df["Upper_Band"] = df["Middle_Band"] + 2 * df["Std"]
         df["Lower_Band"] = df["Middle_Band"] - 2 * df["Std"]
         
+        # Volatility (20-day rolling standard deviation of percentage changes)
         df["Volatility"] = pd.to_numeric(df["Close"].squeeze(), errors='coerce').pct_change().rolling(window=20).std()
         
+        # Dynamic risk indicator: ATR (Average True Range)
+        if "High" in df.columns and "Low" in df.columns:
+            high = df["High"].to_numpy().flatten()
+            low = df["Low"].to_numpy().flatten()
+            close = df["Close"].to_numpy().flatten()
+            df["ATR"] = talib.ATR(high, low, close, timeperiod=14)
+        else:
+            df["ATR"] = 0.0
+
         self.data = df
 
     def _handle_missing_values(self) -> None:
@@ -66,7 +70,7 @@ class DataHandler:
 
     def _normalize_features(self) -> None:
         feature_cols = ['SMA_20', 'RSI', 'MACD', 'Signal', 'Middle_Band',
-                        'Upper_Band', 'Lower_Band', 'Volatility', 'Volume']
+                        'Upper_Band', 'Lower_Band', 'Volatility', 'Volume', 'ATR']
         df = self.data.copy()
         self.scaler = {}
         for col in feature_cols:

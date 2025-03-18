@@ -1,5 +1,3 @@
-# agent.py
-
 import os
 import pickle
 import numpy as np
@@ -42,7 +40,6 @@ class DuelingDQN(nn.Module):
         qvals = value + (advantage - advantage.mean(dim=1, keepdim=True))
         return qvals
 
-
 class PrioritizedReplayBuffer:
     def __init__(self, capacity: int, alpha: float = 0.6) -> None:
         self.capacity = capacity
@@ -67,7 +64,6 @@ class PrioritizedReplayBuffer:
            priorities = self.priorities[:len(self.buffer)]
        probs = priorities ** self.alpha
        probs_sum = probs.sum()
-       # Check for NaN or zero sum and fallback to uniform probabilities
        if np.isnan(probs_sum) or probs_sum == 0:
            probs = np.ones_like(probs) / len(probs)
        else:
@@ -85,7 +81,6 @@ class PrioritizedReplayBuffer:
        next_states = np.array(batch[3])
        dones = np.array(batch[4])
        return states, actions, rewards, next_states, dones, indices, weights
-
 
     def update_priorities(self, indices: List[int], priorities: np.ndarray) -> None:
         for idx, priority in zip(indices, priorities):
@@ -107,16 +102,17 @@ class PrioritizedReplayBuffer:
         except Exception as e:
             logging.error(f"Error loading replay buffer: {e}")
 
-
 class TradingAgent:
-    def __init__(self, input_dim: int, action_dim: int, use_lstm: bool = False, lr: float = 1e-4, gamma: float = 0.99, tau: float = 0.005, device: str = "cpu", buffer_capacity: int = 10000) -> None:
+    def __init__(self, input_dim: int, action_dim: int, use_lstm: bool = False, 
+                 lr: float = 1e-3,  # Increased learning rate for faster training
+                 gamma: float = 0.99, tau: float = 0.005, device: str = "cpu", buffer_capacity: int = 10000) -> None:
         self.device = device
         self.action_dim = action_dim
         self.gamma = gamma
         self.tau = tau
         self.epsilon = 1.0
-        self.epsilon_min = 0.05
-        self.epsilon_decay = 0.995
+        self.epsilon_min = 0.01   # Lower minimum epsilon for more exploitation
+        self.epsilon_decay = 0.98  # Faster decay for more aggressive action selection
 
         self.policy_net = DuelingDQN(input_dim, action_dim, use_lstm).to(self.device)
         self.target_net = DuelingDQN(input_dim, action_dim, use_lstm).to(self.device)

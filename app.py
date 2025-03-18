@@ -37,7 +37,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
     final_date = pd.to_datetime(final_date_val)
     final_date_str = final_date.strftime("%Y-%m-%d")
     
-    dates, asset_values, sol_prices = [], [], []  # Renamed btc_prices to sol_prices
+    dates, asset_values, sol_prices = [], [], []
     trade_dates, trade_prices, trade_signals = [], [], []
     losses = []
     
@@ -51,29 +51,31 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             logging.info("Stop event detected at row %d; exiting simulation loop.", idx)
             break
 
-        date_val = pd.to_datetime(row['Date'])
-        if hasattr(date_val, 'iloc'):
-            date_val = date_val.iloc[0]
-        date_str = date_val.strftime("%Y-%m-%d")
-        
+        atr = row.get("ATR", 0.0)
         features = bot._get_features(row)
         action_idx = bot.agent.select_action(features)
         price = float(row['Close'].iloc[0]) if isinstance(row['Close'], pd.Series) else float(row['Close'])
-        forced_signal = bot._check_risk_management(price)
+        forced_signal = bot._check_risk_management(price, atr)
         action_used = forced_signal if forced_signal == "sell_all" else bot.action_space.get(action_idx, "hold")
         
         if action_used != "hold":
-            trade_dates.append(date_str)
+            date_val = pd.to_datetime(row['Date'])
+            if isinstance(date_val, pd.Series):
+                date_val = date_val.iloc[0]
+            trade_dates.append(date_val.strftime("%Y-%m-%d"))
             trade_prices.append(price)
             trade_signals.append(action_used)
         
-        bot._execute_trade(action_idx if forced_signal is None else forced_signal, price, mode_client="backtest")
+        bot._execute_trade(action_idx if forced_signal is None else forced_signal, price, atr, mode_client="backtest")
         total_asset = bot.current_balance + bot.current_position * price
+        date_val = pd.to_datetime(row['Date'])
+        if isinstance(date_val, pd.Series):
+            date_val = date_val.iloc[0]
+        dates.append(date_val.strftime("%Y-%m-%d"))
         asset_values.append(total_asset)
-        dates.append(date_str)
         sol_prices.append(price)
         
-        log_message = f"{date_str} | Action: {action_used} | Price: {price:.2f} | Total Asset: ${total_asset:.2f}"
+        log_message = f"{dates[-1]} | Action: {action_used} | Price: {price:.2f} | Total Asset: ${total_asset:.2f}"
         sim_logs.append(log_message)
         
         reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
@@ -88,7 +90,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             sim_results.update({
                 "dates": dates,
                 "asset_values": asset_values,
-                "sol_prices": sol_prices,  # Updated key
+                "sol_prices": sol_prices,
                 "trade_dates": trade_dates,
                 "trade_prices": trade_prices,
                 "trade_signals": trade_signals,
@@ -103,7 +105,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
                 "iteration": iteration
             })
         
-        if date_str == final_date_str:
+        if dates[-1] == final_date_str:
             logging.info("Final date reached: %s. Finalizing simulation iteration.", final_date_str)
             break
         
@@ -164,13 +166,12 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             ax.set_title("Equity Curve")
             ax.legend()
             fig.autofmt_xdate()
-            equity_path = os.path.join(iteration_folder, "equity_chart.png")
-            fig.savefig(equity_path)
+            fig.savefig(os.path.join(iteration_folder, "equity_chart.png"))
             plt.close(fig)
             
             trade_dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in trade_dates]
             fig, ax = plt.subplots()
-            ax.plot(dates_dt, sol_prices, label="SOL Price (USD)", color="blue")  # Updated label and data
+            ax.plot(dates_dt, sol_prices, label="SOL Price (USD)", color="blue")
             for i, d in enumerate(trade_dates_dt):
                 if trade_signals[i].lower().startswith("buy"):
                     ax.plot([d], [trade_prices[i]], marker="^", markersize=8, color="green", label="Buy" if i == 0 else "")
@@ -181,8 +182,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             ax.set_title("SOL Price with Trades")
             ax.legend()
             fig.autofmt_xdate()
-            sol_price_path = os.path.join(iteration_folder, "sol_price_chart.png")
-            fig.savefig(sol_price_path)
+            fig.savefig(os.path.join(iteration_folder, "sol_price_chart.png"))
             plt.close(fig)
             
             if losses:
@@ -190,10 +190,9 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
                 ax.plot(range(1, len(losses)+1), losses, label="Training Loss")
                 ax.set_xlabel("Iteration")
                 ax.set_ylabel("Loss")
-                ax.setTitle("Training Loss")
+                ax.set_title("Training Loss")
                 ax.legend()
-                loss_path = os.path.join(iteration_folder, "loss_chart.png")
-                fig.savefig(loss_path)
+                fig.savefig(os.path.join(iteration_folder, "loss_chart.png"))
                 plt.close(fig)
             
             stats = {
@@ -205,22 +204,20 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
                 "Max Drawdown": max_drawdown
             }
             df_stats = pd.DataFrame(list(stats.items()), columns=["Metric", "Value"])
-            excel_path = os.path.join(iteration_folder, "simulation_stats.xlsx")
-            df_stats.to_excel(excel_path, index=False)
+            df_stats.to_excel(os.path.join(iteration_folder, "simulation_stats.xlsx"), index=False)
             
-            logging.info("Simulation iteration %d results saved to folder: %s", iteration, iteration_folder)
+            logging.info("Simulation iteration %d results saved to folder.", iteration)
         except Exception as e:
             logging.error("Error while saving simulation outputs: %s", e)
     
-    logging.info("Simulation iteration %d completed and finalized.", iteration)
+    logging.info("Simulation iteration %d completed.", iteration)
     return sim_results
 
 def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, start_date: str, end_date: Optional[str],
-                   stop_loss_pct: float, take_profit_pct: float, number_of_simulations: int, save_graphs: bool) -> None:
+                   number_of_simulations: int, save_graphs: bool) -> None:
     stop_evt.clear()
     
-    bot_for_data = TradingBot(mode=mode, device="cpu", stop_loss_pct=stop_loss_pct,
-                               take_profit_pct=take_profit_pct, start_date=start_date, end_date=end_date)
+    bot_for_data = TradingBot(mode=mode, device="cpu", start_date=start_date, end_date=end_date)
     data = bot_for_data.data_handler.download_data()
     
     batch_folder = None
@@ -236,15 +233,14 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
 
     for i in range(number_of_simulations):
         if stop_evt.is_set():
-            logging.info("Stop event detected before starting iteration %d; breaking out.", i+1)
+            logging.info("Stop event detected before iteration %d; exiting.", i+1)
             break
         
         sim_results["iteration"] = i + 1
         sim_logs[:] = []
         
         logging.info("Starting simulation iteration %d of %d", i+1, number_of_simulations)
-        bot = TradingBot(mode=mode, device="cpu", stop_loss_pct=stop_loss_pct,
-                         take_profit_pct=take_profit_pct, start_date=start_date, end_date=end_date)
+        bot = TradingBot(mode=mode, device="cpu", start_date=start_date, end_date=end_date)
         if os.path.exists("agent.pth"):
             bot.load_state()
         
@@ -253,7 +249,7 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
                                 iteration=i+1, batch_folder=batch_folder, final_iteration=final_iteration)
         
         if stop_evt.is_set():
-            logging.info("Stop event detected after iteration %d; breaking out.", i+1)
+            logging.info("Stop event detected after iteration %d; exiting.", i+1)
             break
         
         if not stop_evt.is_set():
@@ -296,17 +292,15 @@ def start_simulation() -> Any:
 
     req = request.json
     mode = req.get("mode", "backtest")
-    start_date = req.get("start_date", "2020-01-01")
+    start_date = req.get("start_date", "2020-03-16")
     end_date = req.get("end_date", None)
-    stop_loss_pct = float(req.get("stop_loss_pct", 5)) / 100.0
-    take_profit_pct = float(req.get("take_profit_pct", 10)) / 100.0
     number_of_simulations = int(req.get("number_of_simulations", 1))
     save_graphs = bool(req.get("save_graphs", False))
     
     simulation_process = Process(
         target=run_simulation,
         args=(stop_event, simulation_results, simulation_logs, mode, start_date, end_date,
-              stop_loss_pct, take_profit_pct, number_of_simulations, save_graphs)
+              number_of_simulations, save_graphs)
     )
     simulation_process.start()
     logging.info("Simulation process started.")
