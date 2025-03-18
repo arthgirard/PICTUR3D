@@ -35,6 +35,12 @@ body.dark-mode {
   left: 0;
   right: 0;
   z-index: 1000;
+  box-shadow: none;  /* Remove default shadow */
+  transition: box-shadow 0.3s ease;  /* Add transition for smooth effect */
+}
+
+/* New class for shadow when scrolling */
+.navbar.scrolled {
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
 }
 
