@@ -1,6 +1,5 @@
 # api_clients.py
 
-import os
 import time
 import logging
 import requests

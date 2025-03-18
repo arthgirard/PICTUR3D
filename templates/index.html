@@ -2,13 +2,11 @@
 <html lang="en">
   <head>
     <style>
-      /* Disable transitions on load */
       .no-transition * {
         transition: none !important;
       }
     </style>
     <script>
-      // Immediately add no-transition class
       document.documentElement.classList.add('no-transition');
       window.addEventListener('load', function() {
         setTimeout(function() {
@@ -19,21 +17,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PICTUR3D</title>
-    <!-- Fonts and CSS -->
     <link href="https://fonts.googleapis.com/css2?family=Doto&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" crossorigin="anonymous">
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <!-- Load moment, Chart.js, and adapter -->
     <script src="https://cdn.jsdelivr.net/npm/moment"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment"></script>
     <link id="favicon" rel="icon" type="image/png" href="{{ url_for('static', filename='img/favicon.png') }}">
   </head>
   <body>
-    <!-- Navbar -->
     <nav class="navbar navbar-expand-lg navbar-light bg-light" id="navbar">
       <a class="navbar-brand" href="#"><strong>PICTUR3D</strong></a>
       <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav">
@@ -48,16 +43,14 @@
       </div>
     </nav>
 
-    <!-- Dashboard Section -->
     <div class="container mt-4" id="dashboardSection">
       <h1 class="mb-4">Dashboard</h1>
-      <!-- Simulation Parameters Card -->
       <div class="card mb-4" id="parametersCard">
         <div class="card-body">
           <h5>Simulation Parameters</h5>
           <div class="form-group">
             <label for="startDate">Start Date</label>
-            <input type="date" id="startDate" class="form-control" value="2020-01-01">
+            <input type="date" id="startDate" class="form-control" value="2020-03-20">
           </div>
           <div class="form-group">
             <label for="endDate">End Date</label>
@@ -71,20 +64,17 @@
             <label for="takeProfit">Take Profit (%)</label>
             <input type="number" id="takeProfit" class="form-control" value="10" step="0.1">
           </div>
-          <!-- Number of simulations -->
           <div class="form-group">
             <label for="numSimulations">Number of simulations</label>
             <input type="number" id="numSimulations" class="form-control" value="1" min="1">
           </div>
-          <!-- Enable graph-saving -->
           <div class="form-group form-check">
-            <input type="checkbox" class="form-check-input" id="enableGraphSaving">
-            <label class="form-check-label" for="enableGraphSaving">Enable graph-saving</label>
+            <input type="checkbox" class="form-check-input" id="saveResults">
+            <label class="form-check-label" for="saveResults">Save results</label>
           </div>
         </div>
       </div>
 
-      <!-- Trading Mode Card -->
       <div class="card mb-4">
         <div class="card-body">
           <h5>Trading Mode</h5>
@@ -101,7 +91,6 @@
         </div>
       </div>
 
-      <!-- Logs Card -->
       <div id="logsCard" class="card mb-4">
         <div class="card-body">
           <h5>Logs</h5>
@@ -109,7 +98,6 @@
         </div>
       </div>
 
-      <!-- Results & Charts Card -->
       <div id="resultsCard" class="card mb-4" style="position: relative;">
         <div class="card-body">
           <h5>Results</h5>
@@ -118,7 +106,8 @@
               <canvas id="equityChart"></canvas>
             </div>
             <div class="col-md-6">
-              <canvas id="btcPriceChart"></canvas>
+              <!-- Updated canvas id from btcPriceChart to solPriceChart -->
+              <canvas id="solPriceChart"></canvas>
             </div>
           </div>
           <div class="row mt-4">
@@ -133,10 +122,8 @@
       </div>
     </div>
 
-    <!-- jQuery and Bootstrap JS -->
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
-    <!-- Main JS -->
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
   </body>
 </html>

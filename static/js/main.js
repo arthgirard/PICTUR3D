@@ -1,4 +1,3 @@
-/* main.js */
 document.addEventListener("DOMContentLoaded", function() {
   // Global variables
   let simulationFinishedUI = false;
@@ -111,7 +110,6 @@ document.addEventListener("DOMContentLoaded", function() {
     lastKnownLogsCount = 0;
   }
 
-  // Extract the stop simulation UI logic into its own function.
   function stopSimulationUI() {
     simulationRunning = false;
     localStorage.setItem("simulationRunning", "false");
@@ -120,14 +118,12 @@ document.addEventListener("DOMContentLoaded", function() {
     if (resultsInterval) { clearInterval(resultsInterval); resultsInterval = null; }
     if (logsInterval) { clearInterval(logsInterval); logsInterval = null; }
     $("#liveActions").empty();
-    if (window.btcPriceChart) { window.btcPriceChart.destroy(); window.btcPriceChart = null; }
+    if (window.solPriceChart) { window.solPriceChart.destroy(); window.solPriceChart = null; }
     if (window.equityChart) { window.equityChart.destroy(); window.equityChart = null; }
     if (window.lossChart) { window.lossChart.destroy(); window.lossChart = null; }
     
-    // Signal the backend to stop the simulation.
     fetch("/stop_simulation", { method: "POST" });
     
-    // Adjust UI: show parameters card, hide results and logs.
     $parametersCard.slideDown(300);
     $resultsCard.slideUp(300);
     $logsCard.slideUp(300).promise().done(function() {
@@ -148,10 +144,8 @@ document.addEventListener("DOMContentLoaded", function() {
         updateCharts(data);
         let finalBalance = parseFloat(data.final_balance) || 0;
         let iteration = data.iteration || 1;
-        // Use the total simulations from backend data
         const totalSimulationsValue = data.total_simulations || 1;
         
-        // Update performance graph if a new iteration is detected.
         if (iteration > currentIteration) {
           currentIteration = iteration;
           fetchAndUpdatePerformanceHistory();
@@ -202,13 +196,11 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 
   function updateCharts(data) {
-    // Check if the data object has the expected properties
     if (!data || !data.dates || data.dates.length === 0) {
       console.warn("No chart data available to update.");
       return;
     }
   
-    // Equity Chart
     if (window.equityChart && window.equityChart.data) {
       window.equityChart.data.labels = data.dates;
       window.equityChart.data.datasets[0].data = data.asset_values;
@@ -230,23 +222,22 @@ document.addEventListener("DOMContentLoaded", function() {
         options: {decimation: {
           enabled: true,
           algorithm: 'lttb',
-          samples: 100       // Set the number of points to display.
+          samples: 100
         }, responsive: true }
       });
     }
   
-    // BTC Price Chart
-    if (window.btcPriceChart && window.btcPriceChart.data) {
-      window.btcPriceChart.data.labels = data.dates;
-      window.btcPriceChart.data.datasets[0].data = data.btc_prices;
+    if (window.solPriceChart && window.solPriceChart.data) {
+      window.solPriceChart.data.labels = data.dates;
+      window.solPriceChart.data.datasets[0].data = data.sol_prices;
       if (data.trade_dates && data.trade_prices && data.trade_signals) {
         const tradeData = data.trade_dates.map((date, i) => ({
           x: date,
           y: data.trade_prices[i],
           signal: data.trade_signals[i]
         }));
-        if (window.btcPriceChart.data.datasets.length < 2) {
-          window.btcPriceChart.data.datasets.push({
+        if (window.solPriceChart.data.datasets.length < 2) {
+          window.solPriceChart.data.datasets.push({
             label: "Trades",
             data: tradeData,
             type: "line",
@@ -258,15 +249,15 @@ document.addEventListener("DOMContentLoaded", function() {
             showLine: false
           });
         } else {
-          window.btcPriceChart.data.datasets[1].data = tradeData;
-          window.btcPriceChart.data.datasets[1].pointBackgroundColor = tradeData.map(pt =>
+          window.solPriceChart.data.datasets[1].data = tradeData;
+          window.solPriceChart.data.datasets[1].pointBackgroundColor = tradeData.map(pt =>
             pt.signal.toLowerCase().startsWith("buy") ? "green" : "red"
           );
         }
       }
-      window.btcPriceChart.update();
+      window.solPriceChart.update();
     } else {
-      const ctx2 = document.getElementById("btcPriceChart").getContext("2d");
+      const ctx2 = document.getElementById("solPriceChart").getContext("2d");
       let tradeData = [];
       if (data.trade_dates && data.trade_prices && data.trade_signals) {
         tradeData = data.trade_dates.map((date, i) => ({
@@ -275,13 +266,13 @@ document.addEventListener("DOMContentLoaded", function() {
           signal: data.trade_signals[i]
         }));
       }
-      window.btcPriceChart = new Chart(ctx2, {
+      window.solPriceChart = new Chart(ctx2, {
         type: "line",
         data: {
           labels: data.dates,
           datasets: [{
-            label: "BTC Price (USD)",
-            data: data.btc_prices,
+            label: "SOL Price (USD)",
+            data: data.sol_prices,
             borderColor: "rgba(153, 102, 255, 1)",
             fill: false,
             pointRadius: 0
@@ -301,7 +292,7 @@ document.addEventListener("DOMContentLoaded", function() {
         options: {decimation: {
           enabled: true,
           algorithm: 'lttb',
-          samples: 500       // Set the number of points to display.
+          samples: 500
         }, 
           responsive: true,
           scales: {
@@ -317,7 +308,6 @@ document.addEventListener("DOMContentLoaded", function() {
       });
     }
   
-    // Loss Chart
     if (window.lossChart && window.lossChart.data) {
       window.lossChart.data.labels = data.losses.map((_, i) => i + 1);
       window.lossChart.data.datasets[0].data = data.losses;
@@ -338,14 +328,14 @@ document.addEventListener("DOMContentLoaded", function() {
         options: {decimation: {
           enabled: true,
           algorithm: 'lttb',
-          samples: 100       // Set the number of points to display.
+          samples: 100
         },
-        responsive: true }
+        responsive: true
+      }
       });
     }
   }
   
-
   function fetchAndUpdatePerformanceHistory() {
     fetch("/agent_performance")
       .then(response => response.json())
@@ -392,12 +382,9 @@ document.addEventListener("DOMContentLoaded", function() {
     liveActionsDiv.scrollTop(liveActionsDiv.prop("scrollHeight"));
   }
 
-  // Simulation start/stop handler
   startButton.addEventListener("click", function() {
     if (!simulationRunning) {
-      // Reset flags for new simulation
       simulationFinishedUI = false;
-      // Capture and store the total number of simulations
       totalSimulations = parseInt(document.getElementById("numSimulations").value) || 1;
       
       $("#liveActions").empty();
@@ -419,9 +406,8 @@ document.addEventListener("DOMContentLoaded", function() {
           const endDate = endDateInput.value;
           const stopLoss = stopLossInput.value;
           const takeProfit = takeProfitInput.value;
-          // NEW: Read the new parameters.
           const numSimulations = document.getElementById("numSimulations").value;
-          const saveGraphs = document.getElementById("enableGraphSaving").checked;
+          const saveResults = document.getElementById("saveResults").checked;
           fetch("/start_simulation", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -432,7 +418,7 @@ document.addEventListener("DOMContentLoaded", function() {
               stop_loss_pct: stopLoss,
               take_profit_pct: takeProfit,
               number_of_simulations: totalSimulations,
-              save_graphs: saveGraphs
+              save_results: saveResults
             })
           })
           .then(response => response.json())
@@ -447,11 +433,10 @@ document.addEventListener("DOMContentLoaded", function() {
     }
   });
 
-  // Reset agent handler
-  let resetInProgress = false;
+  let resetAgentBtnDisabled = false;
   resetAgentBtn.addEventListener("click", function() {
-    if (resetInProgress) return;
-    resetInProgress = true;
+    if (resetAgentBtnDisabled) return;
+    resetAgentBtnDisabled = true;
     resetAgentBtn.disabled = true;
     startButton.style.display = "none";
     if (confirm("Are you sure you want to reset the agent? This will stop any running simulation and delete the agent, scaler, replay buffer, and performance history.")) {
@@ -482,12 +467,12 @@ document.addEventListener("DOMContentLoaded", function() {
         alert("An error occurred while resetting the agent.");
       })
       .finally(() => {
-        resetInProgress = false;
+        resetAgentBtnDisabled = false;
         resetAgentBtn.disabled = false;
         startButton.style.display = "inline-block";
       });
     } else {
-      resetInProgress = false;
+      resetAgentBtnDisabled = false;
       resetAgentBtn.disabled = false;
       startButton.style.display = "inline-block";
     }

@@ -1,5 +1,3 @@
-# app.py
-
 import os
 import json
 import time
@@ -15,20 +13,16 @@ matplotlib.use('Agg')
 
 app = Flask(__name__)
 
-# Global placeholders for simulation state.
-simulation_results = None   # Shared dict for simulation results.
-simulation_logs = None      # Shared list for live logs.
-stop_event = None           # Shared stop event.
+simulation_results = None
+simulation_logs = None
+stop_event = None
 
-# Use a threading.Lock for shared updates.
 from threading import Lock
 update_lock = Lock()
 
-# Global simulation process reference.
 simulation_process = None
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-
 
 def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, sim_logs: Any,
                             save_graphs: bool = True, data: Optional[pd.DataFrame] = None,
@@ -43,7 +37,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
     final_date = pd.to_datetime(final_date_val)
     final_date_str = final_date.strftime("%Y-%m-%d")
     
-    dates, asset_values, btc_prices = [], [], []
+    dates, asset_values, sol_prices = [], [], []  # Renamed btc_prices to sol_prices
     trade_dates, trade_prices, trade_signals = [], [], []
     losses = []
     
@@ -77,7 +71,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
         total_asset = bot.current_balance + bot.current_position * price
         asset_values.append(total_asset)
         dates.append(date_str)
-        btc_prices.append(price)
+        sol_prices.append(price)
         
         log_message = f"{date_str} | Action: {action_used} | Price: {price:.2f} | Total Asset: ${total_asset:.2f}"
         sim_logs.append(log_message)
@@ -94,7 +88,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             sim_results.update({
                 "dates": dates,
                 "asset_values": asset_values,
-                "btc_prices": btc_prices,
+                "sol_prices": sol_prices,  # Updated key
                 "trade_dates": trade_dates,
                 "trade_prices": trade_prices,
                 "trade_signals": trade_signals,
@@ -104,9 +98,9 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
                 "num_trades": len(trade_dates),
                 "percentage_return": ((bot.current_balance + bot.current_position * price - bot.initial_balance) / bot.initial_balance) * 100,
                 "net_profit": (bot.current_balance + bot.current_position * price) - bot.initial_balance,
-                "max_drawdown": 0,  # Optionally compute incrementally.
+                "max_drawdown": 0,
                 "finished": False,
-                "iteration": iteration  # Update iteration for this run.
+                "iteration": iteration
             })
         
         if date_str == final_date_str:
@@ -176,19 +170,19 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             
             trade_dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in trade_dates]
             fig, ax = plt.subplots()
-            ax.plot(dates_dt, btc_prices, label="BTC Price (USD)", color="blue")
+            ax.plot(dates_dt, sol_prices, label="SOL Price (USD)", color="blue")  # Updated label and data
             for i, d in enumerate(trade_dates_dt):
                 if trade_signals[i].lower().startswith("buy"):
                     ax.plot([d], [trade_prices[i]], marker="^", markersize=8, color="green", label="Buy" if i == 0 else "")
                 elif trade_signals[i].lower().startswith("sell"):
                     ax.plot([d], [trade_prices[i]], marker="v", markersize=8, color="red", label="Sell" if i == 0 else "")
             ax.set_xlabel("Date")
-            ax.set_ylabel("BTC Price (USD)")
-            ax.set_title("BTC Price with Trades")
+            ax.set_ylabel("SOL Price (USD)")
+            ax.set_title("SOL Price with Trades")
             ax.legend()
             fig.autofmt_xdate()
-            btc_price_path = os.path.join(iteration_folder, "btc_price_chart.png")
-            fig.savefig(btc_price_path)
+            sol_price_path = os.path.join(iteration_folder, "sol_price_chart.png")
+            fig.savefig(sol_price_path)
             plt.close(fig)
             
             if losses:
@@ -196,7 +190,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
                 ax.plot(range(1, len(losses)+1), losses, label="Training Loss")
                 ax.set_xlabel("Iteration")
                 ax.set_ylabel("Loss")
-                ax.set_title("Training Loss")
+                ax.setTitle("Training Loss")
                 ax.legend()
                 loss_path = os.path.join(iteration_folder, "loss_chart.png")
                 fig.savefig(loss_path)
@@ -221,17 +215,14 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
     logging.info("Simulation iteration %d completed and finalized.", iteration)
     return sim_results
 
-
 def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, start_date: str, end_date: Optional[str],
                    stop_loss_pct: float, take_profit_pct: float, number_of_simulations: int, save_graphs: bool) -> None:
     stop_evt.clear()
     
-    # Download historical data once.
     bot_for_data = TradingBot(mode=mode, device="cpu", stop_loss_pct=stop_loss_pct,
                                take_profit_pct=take_profit_pct, start_date=start_date, end_date=end_date)
     data = bot_for_data.data_handler.download_data()
     
-    # If graph-saving is enabled, create a batch folder.
     batch_folder = None
     if save_graphs:
         root_folder = os.path.join(os.getcwd(), "backtest_results")
@@ -240,20 +231,15 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
         batch_folder = os.path.join(root_folder, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
         os.mkdir(batch_folder)
     
-    # Instead of clearing the entire sim_results each iteration, update its keys.
     sim_results["finished"] = False
     sim_results["total_simulations"] = number_of_simulations
 
-    
     for i in range(number_of_simulations):
         if stop_evt.is_set():
             logging.info("Stop event detected before starting iteration %d; breaking out.", i+1)
             break
         
-        # Update the current iteration number.
         sim_results["iteration"] = i + 1
-        
-        # (Optionally, clear only the logs for a fresh view.)
         sim_logs[:] = []
         
         logging.info("Starting simulation iteration %d of %d", i+1, number_of_simulations)
@@ -262,7 +248,6 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
         if os.path.exists("agent.pth"):
             bot.load_state()
         
-        # Set final_iteration True only for the last iteration.
         final_iteration = (i == number_of_simulations - 1)
         run_backtest_simulation(bot, stop_evt, sim_results, sim_logs, save_graphs, data=data,
                                 iteration=i+1, batch_folder=batch_folder, final_iteration=final_iteration)
@@ -271,14 +256,11 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
             logging.info("Stop event detected after iteration %d; breaking out.", i+1)
             break
         
-        # Clear the stop event for next iteration if not externally set.
         if not stop_evt.is_set():
             stop_evt.clear()
     
-    # After finishing all iterations (or if stopped), update the finished flag.
     if not stop_evt.is_set():
         sim_results["finished"] = True
-    # Small delay to allow the UI polling to update.
     time.sleep(1)
 
 def save_performance_metrics(new_metrics: Dict) -> None:
@@ -301,16 +283,13 @@ def save_performance_metrics(new_metrics: Dict) -> None:
     except Exception as e:
         logging.error("Error saving performance history: %s", e)
 
-
 @app.route("/")
 def index() -> Any:
     return render_template("index.html")
 
-
 @app.route("/start_simulation", methods=["POST"])
 def start_simulation() -> Any:
     global simulation_process
-    # Clear previous simulation results and logs.
     simulation_results.clear()
     simulation_logs[:] = []
     stop_event.clear()
@@ -333,23 +312,19 @@ def start_simulation() -> Any:
     logging.info("Simulation process started.")
     return jsonify({"status": "Simulation started", "mode": mode})
 
-
 @app.route("/stop_simulation", methods=["POST"])
 def stop_simulation() -> Any:
     stop_simulation_logic()
     save_performance_metrics(dict(simulation_results))
     return jsonify({"status": "Stop signal sent and performance metrics saved."})
 
-
 @app.route("/results", methods=["GET"])
 def results_route() -> Any:
     return jsonify(dict(simulation_results))
 
-
 @app.route("/live_logs", methods=["GET"])
 def live_logs_route() -> Any:
     return jsonify(list(simulation_logs))
-
 
 @app.route("/agent_performance", methods=["GET"])
 def agent_performance() -> Any:
@@ -364,7 +339,6 @@ def agent_performance() -> Any:
             return jsonify({"error": "Error reading performance history"}), 500
     else:
         return jsonify([])
-
 
 @app.route("/delete_agent", methods=["POST"])
 def delete_agent() -> Any:
@@ -385,22 +359,20 @@ def delete_agent() -> Any:
         return jsonify({"status": "Agent, replay buffer, scaler, and performance history deleted successfully."})
     else:
         return jsonify({"status": "Deletion canceled."}), 400
-    
 
 @app.route("/clear_logs", methods=["POST"])
 def clear_logs() -> Any:
     simulation_logs[:] = []
     return jsonify({"status": "Logs cleared"})
 
-
 def stop_simulation_logic() -> None:
     logging.info("Stop simulation logic initiated.")
     stop_event.set()
     global simulation_process
     if simulation_process is not None:
-        max_wait = 10  # seconds
+        max_wait = 10
         waited = 0
-        interval = 0.5  # seconds
+        interval = 0.5
         try:
             while simulation_process.is_alive() and waited < max_wait:
                 logging.info("Waiting for simulation process to stop... (waited %.1f sec)", waited)
@@ -419,10 +391,9 @@ def stop_simulation_logic() -> None:
     else:
         logging.info("No simulation process to stop.")
 
-
 if __name__ == '__main__':
     from multiprocessing import freeze_support, Manager
-    freeze_support()  # For Windows support.
+    freeze_support()
     manager = Manager()
     simulation_results = manager.dict()
     simulation_logs = manager.list()

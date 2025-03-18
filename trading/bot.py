@@ -1,12 +1,9 @@
-# bot.py
-
 import time
 import json
 import logging
-import datetime
 import numpy as np
 import pandas as pd
-from typing import Any, Optional, Dict, List
+from typing import Any, Optional, Dict
 
 from trading.data_handler import DataHandler
 from trading.sentiment import GDELTNewsClient, SentimentAnalyzer
@@ -52,23 +49,23 @@ class TradingBot:
         if date_str in self.sentiment_cache:
             sentiment_score = self.sentiment_cache[date_str]
         else:
+            # Changed query from "bitcoin" to "solana"
             if self.mode in ["backtest", "paper"]:
-                headlines = self.news_client.fetch_headlines(query="bitcoin", page_size=5, date=date_val)
+                headlines = self.news_client.fetch_headlines(query="solana", page_size=5, date=date_val)
             else:
-                headlines = self.news_client.fetch_headlines(query="bitcoin", page_size=5)
+                headlines = self.news_client.fetch_headlines(query="solana", page_size=5)
             sentiment_score = self.sentiment_analyzer.compute_sentiment(headlines)
             self.sentiment_cache[date_str] = sentiment_score
         features = np.concatenate([tech_features, np.array([sentiment_score], dtype=np.float32)])
         return features
 
-
-    def _update_avg_entry_price(self, trade_price: float, btc_amount: float) -> None:
+    def _update_avg_entry_price(self, trade_price: float, sol_amount: float) -> None:
         if self.avg_entry_price is None or self.current_position == 0:
             self.avg_entry_price = trade_price
         else:
             total_cost = self.avg_entry_price * self.current_position
-            new_total_cost = total_cost + (trade_price * btc_amount)
-            self.avg_entry_price = new_total_cost / (self.current_position + btc_amount)
+            new_total_cost = total_cost + (trade_price * sol_amount)
+            self.avg_entry_price = new_total_cost / (self.current_position + sol_amount)
 
     def _check_risk_management(self, current_price: float) -> Optional[str]:
         if self.current_position > 0 and self.avg_entry_price is not None:
@@ -81,9 +78,6 @@ class TradingBot:
         return None
 
     def _execute_trade(self, action: Any, price: float, mode_client: str) -> None:
-        """
-        Execute a trade based on the action. Consolidates trade execution logic for backtest, paper, and live modes.
-        """
         price = float(price)
         risk_signal = self._check_risk_management(price)
         trade_action = risk_signal if risk_signal == "sell_all" else self.action_space.get(action, "hold")
@@ -91,34 +85,34 @@ class TradingBot:
             if trade_action.startswith("buy"):
                 trade_percentage = 0.25 if "25" in trade_action else 0.50
                 trade_amount_usd = self.current_balance * trade_percentage
-                btc_bought = (trade_amount_usd * (1 - self.trading_fee)) / price
+                sol_bought = (trade_amount_usd * (1 - self.trading_fee)) / price
                 self.current_balance -= trade_amount_usd
-                self.current_position += btc_bought
-                self._update_avg_entry_price(price, btc_bought)
-                logging.info(f"Backtest BUY: Spent {trade_amount_usd:.2f} USD to buy {btc_bought:.6f} BTC at {price:.2f}")
-            elif trade_action.startswith("sell"):
+                self.current_position += sol_bought
+                self._update_avg_entry_price(price, sol_bought)
+                logging.info(f"Backtest BUY: Spent {trade_amount_usd:.2f} USD to buy {sol_bought:.6f} SOL at price {price:.2f}")
+            elif trade_action.startswith("sell") and self.current_position > 0:
                 trade_percentage = 1.0 if trade_action == "sell_all" else (0.25 if "25" in trade_action else 0.50)
-                if self.current_position > 0:
-                    btc_to_sell = self.current_position * trade_percentage
-                    proceeds = btc_to_sell * price * (1 - self.trading_fee)
-                    self.current_balance += proceeds
-                    self.current_position -= btc_to_sell
-                    if trade_percentage == 1.0:
-                        self.avg_entry_price = None
-                    logging.info(f"Backtest SELL: Sold {btc_to_sell:.6f} BTC for {proceeds:.2f} USD at {price:.2f}")
+                sol_to_sell = self.current_position * trade_percentage
+                proceeds = sol_to_sell * price * (1 - self.trading_fee)
+                self.current_balance += proceeds
+                self.current_position -= sol_to_sell
+                logging.info(f"Backtest SELL: Sold {sol_to_sell:.6f} SOL for {proceeds:.2f} USD at price {price:.2f}")
+            else:
+                logging.info("No action taken in backtest trading.")
         elif mode_client == "paper":
+            # For paper trading, the client will log orders.
             self.paper_client.place_order(trade_action.split('_')[0], 0.25 if "25" in trade_action else (0.50 if "50" in trade_action else 1.0), price)
         elif mode_client == "live":
-            pair = "XBTUSD"
+            pair = "SOLUSD"  # Changed from "XBTUSD" to "SOLUSD"
             if trade_action.startswith("buy"):
                 trade_percentage = 0.25 if "25" in trade_action else 0.50
                 trade_amount_usd = self.current_balance * trade_percentage
-                btc_volume = (trade_amount_usd * (1 - self.trading_fee)) / price
-                volume = round(btc_volume, 6)
+                sol_volume = (trade_amount_usd * (1 - self.trading_fee)) / price
+                volume = round(sol_volume, 6)
             elif trade_action.startswith("sell"):
                 trade_percentage = 1.0 if trade_action == "sell_all" else (0.25 if "25" in trade_action else 0.50)
-                btc_volume = self.current_position * trade_percentage
-                volume = round(btc_volume, 6)
+                sol_volume = self.current_position * trade_percentage
+                volume = round(sol_volume, 6)
             else:
                 volume = 0
             if volume > 0:
@@ -130,7 +124,7 @@ class TradingBot:
         data = self.data_handler.download_data()
         asset_values, dates = [], []
         losses = []
-        btc_prices = []
+        sol_prices = []  # Renamed from btc_prices
         trade_dates, trade_prices, trade_signals = [], [], []
         self.current_balance = self.initial_balance
         self.current_position = 0.0
@@ -155,7 +149,7 @@ class TradingBot:
             total_asset = self.current_balance + self.current_position * price
             dates.append(pd.to_datetime(row['Date']).strftime("%Y-%m-%d"))
             asset_values.append(total_asset)
-            btc_prices.append(price)
+            sol_prices.append(price)  # Updated from btc_prices
             reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
             if forced_signal is None and self.action_space.get(action_idx, "hold") != "hold":
                 reward -= 0.001
@@ -180,7 +174,7 @@ class TradingBot:
         performance_metrics = {
             "dates": dates,
             "asset_values": asset_values,
-            "btc_prices": btc_prices,
+            "sol_prices": sol_prices,  # Updated key
             "losses": losses,
             "trade_dates": trade_dates,
             "trade_prices": trade_prices,
@@ -209,15 +203,15 @@ class TradingBot:
             axs[0].set_ylabel("Total Asset (USD)")
             axs[0].set_title("Equity Curve")
             axs[0].legend()
-            axs[1].plot(dates, btc_prices, label="BTC Price", color="blue")
+            axs[1].plot(dates, sol_prices, label="SOL Price", color="blue")  # Updated label
             for i, d in enumerate(trade_dates):
                 if trade_signals[i].startswith("buy"):
                     axs[1].plot(d, trade_prices[i], marker="^", markersize=8, color="green", label="Buy" if i == 0 else "")
                 elif trade_signals[i].startswith("sell"):
                     axs[1].plot(d, trade_prices[i], marker="v", markersize=8, color="red", label="Sell" if i == 0 else "")
             axs[1].set_xlabel("Date")
-            axs[1].set_ylabel("BTC Price (USD)")
-            axs[1].set_title("BTC Price with Trade Signals")
+            axs[1].set_ylabel("SOL Price (USD)")  # Updated label
+            axs[1].set_title("SOL Price with Trade Signals")
             axs[1].legend()
             plt.tight_layout()
             plt.show()
