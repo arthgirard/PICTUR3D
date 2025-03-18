@@ -65,8 +65,8 @@ class TradingBot:
         else:
             atr = float(atr)
         if self.current_position > 0 and self.avg_entry_price is not None:
-            dynamic_stop = self.avg_entry_price - atr      # exit if price drops > 1 ATR below entry
-            dynamic_target = self.avg_entry_price + atr * 3  # exit if price rises 3 ATR above entry
+            dynamic_stop = self.avg_entry_price - atr          # exit if price drops > 1 ATR below entry
+            dynamic_target = self.avg_entry_price + atr * 2      # lowered multiplier from 3 to 2 ATR
             if current_price <= dynamic_stop:
                 logging.info(f"Dynamic Stop-loss triggered: current price {current_price:.2f} <= {dynamic_stop:.2f}")
                 return "sell_all"
@@ -74,6 +74,7 @@ class TradingBot:
                 logging.info(f"Dynamic Take-profit triggered: current price {current_price:.2f} >= {dynamic_target:.2f}")
                 return "sell_all"
         return None
+
 
     def _update_avg_entry_price(self, trade_price: float, sol_amount: float) -> None:
         if self.avg_entry_price is None or self.current_position == 0:
@@ -157,8 +158,8 @@ class TradingBot:
             asset_values.append(total_asset)
             sol_prices.append(price)
             reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
-            if forced_signal is None and self.action_space.get(action_idx, "hold") != "hold":
-                reward -= 0.001
+            if forced_signal is None and self.action_space.get(action_idx, "hold") == "hold":
+                reward -= 0.001  # Penalize holding to encourage trading
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
             loss = self.agent.train(batch_size=64)
             if loss is not None:
