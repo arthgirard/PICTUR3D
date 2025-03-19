@@ -260,6 +260,11 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
     time.sleep(1)
 
 def save_performance_metrics(new_metrics: Dict) -> None:
+    # Only record the final net profit and the current timestamp.
+    record = {
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "net_profit": new_metrics.get("net_profit", 0)
+    }
     history_file = "performance_history.json"
     if os.path.exists(history_file):
         try:
@@ -270,8 +275,7 @@ def save_performance_metrics(new_metrics: Dict) -> None:
             history = []
     else:
         history = []
-    new_metrics["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    history.append(new_metrics)
+    history.append(record)
     try:
         with open(history_file, "w") as f:
             json.dump(history, f, indent=4)
@@ -309,7 +313,6 @@ def start_simulation() -> Any:
 @app.route("/stop_simulation", methods=["POST"])
 def stop_simulation() -> Any:
     stop_simulation_logic()
-    save_performance_metrics(dict(simulation_results))
     return jsonify({"status": "Stop signal sent and performance metrics saved."})
 
 @app.route("/results", methods=["GET"])
@@ -338,7 +341,6 @@ def agent_performance() -> Any:
 def delete_agent() -> Any:
     global simulation_process
     stop_simulation_logic()
-    save_performance_metrics(dict(simulation_results))
     
     confirmation = request.json.get("confirmation", False)
     if confirmation:
