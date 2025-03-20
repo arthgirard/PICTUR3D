@@ -22,7 +22,7 @@ class TradingBot:
         self.feature_cols = ['SMA_20', 'RSI', 'MACD', 'Signal', 'Middle_Band', 
                              'Upper_Band', 'Lower_Band', 'Volatility', 'Volume', 'ATR']
         self.input_dim = len(self.feature_cols) + 1  # extra sentiment score
-        self.action_space: Dict[int, str] = {0: "hold", 1: "buy_25", 2: "buy_50", 3: "sell_25", 4: "sell_50"}
+        self.action_space: Dict[int, str] = {0: "hold", 1: "buy", 2: "sell"}
         self.agent = TradingAgent(input_dim=self.input_dim, action_dim=len(self.action_space), device=self.device)
         self.initial_balance = INITIAL_BALANCE
         self.current_balance = self.initial_balance
@@ -57,74 +57,158 @@ class TradingBot:
         features = np.concatenate([tech_features, np.array([sentiment_score], dtype=np.float32)])
         return features
 
-    # Dynamic risk management using ATR
-    def _check_risk_management(self, current_price: float, atr) -> Optional[str]:
+    # New risk parameter – percentage of the current balance risked per trade
+    risk_percentage: float = 0.01  # 1% risk per trade
+
+    def calculate_dynamic_trade_size(self, price: float, atr: float) -> float:
+        """
+        Compute the dynamic trade size based on the current balance, price, ATR (volatility), and fees.
+        The idea is to risk a fixed percentage (risk_percentage) of your balance.
+        
+        - risk_amount: dollar amount you are willing to risk.
+        - stop_loss_distance: set to ATR or a minimum value (here 0.5% of price) if ATR is very low.
+        - fee_cost: cost per unit due to trading fees.
+        
+        The trade size (in asset units) is the risk_amount divided by the effective risk per unit.
+        """
         # Ensure atr is a scalar float.
         if isinstance(atr, pd.Series):
             atr = float(atr.iloc[0])
-        else:
-            atr = float(atr)
+        
+        risk_amount = self.current_balance * self.risk_percentage
+        min_stop_loss = 0.005 * price  # minimum stop loss (0.5% of price)
+        stop_loss_distance = max(atr, min_stop_loss)
+        fee_cost = self.trading_fee * price  # fee cost per unit when buying
+        effective_risk_per_unit = stop_loss_distance + fee_cost
+        if effective_risk_per_unit == 0:
+            return 0.0
+        trade_size = risk_amount / effective_risk_per_unit
+        return trade_size
+
+    def _check_risk_management(self, current_price: float, atr) -> Optional[str]:
+        # Ensure atr is a scalar.
+        if isinstance(atr, pd.Series):
+            atr = float(atr.iloc[0])
+        
+        # Only trigger risk management if a position is open.
         if self.current_position > 0 and self.avg_entry_price is not None:
-            dynamic_stop = self.avg_entry_price - atr          # exit if price drops > 1 ATR below entry
-            dynamic_target = self.avg_entry_price + atr * 2      # lowered multiplier from 3 to 2 ATR
-            if current_price <= dynamic_stop:
-                logging.info(f"Dynamic Stop-loss triggered: current price {current_price:.2f} <= {dynamic_stop:.2f}")
-                return "sell_all"
-            if current_price >= dynamic_target:
-                logging.info(f"Dynamic Take-profit triggered: current price {current_price:.2f} >= {dynamic_target:.2f}")
+            # Set a floor loss of 3% below the average entry price.
+            loss_limit = 0.03  
+            floor_stop = self.avg_entry_price * (1 - loss_limit)
+            
+            # Initialize or update the maximum price reached since entry.
+            if not hasattr(self, 'max_price_since_entry') or self.max_price_since_entry is None:
+                self.max_price_since_entry = self.avg_entry_price
+            self.max_price_since_entry = max(self.max_price_since_entry, current_price)
+            
+            # When the price is above the entry, use a trailing stop based on a fraction of ATR.
+            if current_price > self.avg_entry_price:
+                # Use half of the ATR instead of full ATR to give the position more room.
+                trailing_stop = self.max_price_since_entry - 0.5 * atr
+                # Make sure the trailing stop doesn't go below the entry price.
+                trailing_stop = max(trailing_stop, self.avg_entry_price)
+            else:
+                trailing_stop = floor_stop
+
+            if current_price <= trailing_stop:
+                logging.info(f"Stop-loss triggered: current price {current_price:.2f} <= stop threshold {trailing_stop:.2f}")
                 return "sell_all"
         return None
 
-
-    def _update_avg_entry_price(self, trade_price: float, sol_amount: float) -> None:
-        if self.avg_entry_price is None or self.current_position == 0:
-            self.avg_entry_price = trade_price
+    def _execute_trade(self, action: Any, price: float, atr, mode_client: str) -> None:
+        """
+        Revamped trade execution incorporating risk management, profit-taking,
+        and a check to avoid selling when the position is near zero.
+        """
+        # Convert atr to a scalar if needed.
+        if isinstance(atr, pd.Series):
+            atr = float(atr.iloc[0])
+        
+        forced_signal = self._check_risk_management(price, atr)
+        
+        # Determine the trade action.
+        if forced_signal == "sell_all":
+            trade_action = "sell_all"
         else:
-            total_cost = self.avg_entry_price * self.current_position
-            new_total_cost = total_cost + (trade_price * sol_amount)
-            self.avg_entry_price = new_total_cost / (self.current_position + sol_amount)
-
-    def _execute_trade(self, action: Any, price: float, atr: float, mode_client: str) -> None:
-        price = float(price)
-        risk_signal = self._check_risk_management(price, atr)
-        trade_action = risk_signal if risk_signal == "sell_all" else self.action_space.get(action, "hold")
-        if mode_client == "backtest":
-            if trade_action.startswith("buy"):
-                trade_percentage = 0.25 if "25" in trade_action else 0.50
-                trade_amount_usd = self.current_balance * trade_percentage
-                sol_bought = (trade_amount_usd * (1 - self.trading_fee)) / price
-                self.current_balance -= trade_amount_usd
-                self.current_position += sol_bought
-                self._update_avg_entry_price(price, sol_bought)
-                logging.info(f"Backtest BUY: Spent {trade_amount_usd:.2f} USD to buy {sol_bought:.6f} SOL at {price:.2f}")
-            elif trade_action.startswith("sell") and self.current_position > 0:
-                trade_percentage = 1.0 if trade_action == "sell_all" else (0.25 if "25" in trade_action else 0.50)
-                sol_to_sell = self.current_position * trade_percentage
-                proceeds = sol_to_sell * price * (1 - self.trading_fee)
-                self.current_balance += proceeds
-                self.current_position -= sol_to_sell
-                logging.info(f"Backtest SELL: Sold {sol_to_sell:.6f} SOL for {proceeds:.2f} USD at {price:.2f}")
+            if self.current_position > 0 and self.avg_entry_price is not None:
+                profit_target = self.avg_entry_price + 2 * atr
+                if price >= profit_target:
+                    trade_action = "sell_partial"
+                else:
+                    if isinstance(action, str):
+                        trade_action = action
+                    else:
+                        trade_action = self.action_space.get(action, "hold")
             else:
-                logging.info("No action taken in backtest.")
+                if isinstance(action, str):
+                    trade_action = action
+                else:
+                    trade_action = self.action_space.get(action, "hold")
+        
+        # Define a minimal position threshold.
+        minimal_position = 1e-6
+
+        if mode_client == "backtest":
+            if trade_action == "buy":
+                trade_size = self.calculate_dynamic_trade_size(price, atr)
+                if trade_size > 0:
+                    cost = trade_size * price * (1 + self.trading_fee)
+                    if cost > self.current_balance:
+                        trade_size = self.current_balance / (price * (1 + self.trading_fee))
+                    self.current_balance -= trade_size * price * (1 + self.trading_fee)
+                    if self.current_position <= 0:
+                        self.avg_entry_price = price
+                        self.max_price_since_entry = price
+                    else:
+                        total_cost = self.avg_entry_price * self.current_position + price * trade_size
+                        self.avg_entry_price = total_cost / (self.current_position + trade_size)
+                        self.max_price_since_entry = max(self.max_price_since_entry, price)
+                    self.current_position += trade_size
+                    logging.info(f"Backtest BUY: Bought {trade_size:.6f} SOL at {price:.2f} USD")
+            elif trade_action in ["sell", "sell_all", "sell_partial"]:
+                # Do not sell if position is negligible.
+                if self.current_position <= minimal_position:
+                    logging.info("No significant position to sell; holding.")
+                    return
+                if trade_action == "sell_partial":
+                    trade_size = self.current_position * 0.5  # Sell 50% of position.
+                else:  # "sell" or "sell_all"
+                    trade_size = self.current_position
+                proceeds = trade_size * price * (1 - self.trading_fee)
+                self.current_balance += proceeds
+                self.current_position -= trade_size
+                logging.info(f"Backtest SELL: Sold {trade_size:.6f} SOL at {price:.2f} USD, proceeds: {proceeds:.2f} USD")
+            else:
+                logging.info("Backtest HOLD: No action taken.")
+        
         elif mode_client == "paper":
-            self.paper_client.place_order(trade_action.split('_')[0], 0.25 if "25" in trade_action else (0.50 if "50" in trade_action else 1.0), price)
+            # Implement similar checks for paper trading.
+            if trade_action == "buy":
+                self.paper_client.place_order("buy", 1.0, price)
+            elif trade_action in ["sell", "sell_all", "sell_partial"]:
+                if self.current_position <= minimal_position:
+                    logging.info("No significant position to sell (paper); holding.")
+                    return
+                self.paper_client.place_order("sell", 1.0, price)
+        
         elif mode_client == "live":
             pair = "SOLUSD"
-            if trade_action.startswith("buy"):
-                trade_percentage = 0.25 if "25" in trade_action else 0.50
-                trade_amount_usd = self.current_balance * trade_percentage
-                sol_volume = (trade_amount_usd * (1 - self.trading_fee)) / price
-                volume = round(sol_volume, 6)
-            elif trade_action.startswith("sell"):
-                trade_percentage = 1.0 if trade_action == "sell_all" else (0.25 if "25" in trade_action else 0.50)
-                sol_volume = self.current_position * trade_percentage
-                volume = round(sol_volume, 6)
-            else:
-                volume = 0
-            if volume > 0:
-                result = self.kraken_client.place_order(pair=pair, ordertype="market", type_side=trade_action.split('_')[0], volume=volume)
-                if result:
-                    logging.info(f"Live trading order executed: {result}")
+            if trade_action == "buy":
+                trade_size = self.calculate_dynamic_trade_size(price, atr)
+                volume = round(trade_size, 6)
+                if volume > 0:
+                    result = self.kraken_client.place_order(pair=pair, ordertype="market", type_side="buy", volume=volume)
+                    if result:
+                        logging.info(f"Live BUY order executed: {result}")
+            elif trade_action in ["sell", "sell_all", "sell_partial"]:
+                if self.current_position <= minimal_position:
+                    logging.info("No significant position to sell (live); holding.")
+                    return
+                volume = round(self.current_position, 6)
+                if volume > 0:
+                    result = self.kraken_client.place_order(pair=pair, ordertype="market", type_side="sell", volume=volume)
+                    if result:
+                        logging.info(f"Live SELL order executed: {result}")
 
     def run_backtest(self, web_mode: bool = False, stop_event: Optional[Any] = None) -> Optional[Dict[str, Any]]:
         data = self.data_handler.download_data()
