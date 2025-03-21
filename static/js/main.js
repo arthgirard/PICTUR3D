@@ -213,6 +213,11 @@ document.addEventListener("DOMContentLoaded", function() {
     }
 
     Chart.defaults.font.family = 'Geist Mono, monospace';
+    decimation = {
+      enabled: true,
+      algorithm: 'lttb',
+      samples: 100
+    };
   
     if (window.equityChart && window.equityChart.data) {
       window.equityChart.data.labels = data.dates;
@@ -232,11 +237,10 @@ document.addEventListener("DOMContentLoaded", function() {
             pointRadius: 0
           }]
         },
-        options: {decimation: {
-          enabled: true,
-          algorithm: 'lttb',
-          samples: 100
-        }, responsive: true }
+        options: {responsive: true},
+        plugins: {
+          decimation: decimation
+        }
       });
     }
   
@@ -302,11 +306,7 @@ document.addEventListener("DOMContentLoaded", function() {
             showLine: false
           }]
         },
-        options: {decimation: {
-          enabled: true,
-          algorithm: 'lttb',
-          samples: 500
-        }, 
+        options: {
           responsive: true,
           scales: {
             x: {
@@ -338,13 +338,10 @@ document.addEventListener("DOMContentLoaded", function() {
             fill: false
           }]
         },
-        options: {decimation: {
-          enabled: true,
-          algorithm: 'lttb',
-          samples: 100
-        },
-        responsive: true
-      }
+        options: {responsive: true},
+        plugins: {
+          decimation: decimation
+        }
       });
     }
   }
