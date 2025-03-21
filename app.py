@@ -56,17 +56,22 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
         action_idx = bot.agent.select_action(features)
         price = float(row['Close'].iloc[0]) if isinstance(row['Close'], pd.Series) else float(row['Close'])
         forced_signal = bot._check_risk_management(price, atr)
-        action_used = forced_signal if forced_signal == "sell_all" else bot.action_space.get(action_idx, "hold")
         
-        if action_used != "hold":
+        # Capture the final executed action after re‑evaluation.
+        final_action = bot._execute_trade(
+            action_idx if forced_signal is None else forced_signal,
+            price, atr, mode_client="backtest", features=features
+        )
+        
+        # Record the trade only if a non-hold action was executed.
+        if final_action != "hold":
             date_val = pd.to_datetime(row['Date'])
             if isinstance(date_val, pd.Series):
                 date_val = date_val.iloc[0]
             trade_dates.append(date_val.strftime("%Y-%m-%d"))
             trade_prices.append(price)
-            trade_signals.append(action_used)
+            trade_signals.append(final_action)
         
-        bot._execute_trade(action_idx if forced_signal is None else forced_signal, price, atr, mode_client="backtest")
         total_asset = bot.current_balance + bot.current_position * price
         date_val = pd.to_datetime(row['Date'])
         if isinstance(date_val, pd.Series):
@@ -75,16 +80,17 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
         asset_values.append(total_asset)
         sol_prices.append(price)
         
-        log_message = f"{dates[-1]} | ACTION: {action_used} | PRICE: {price:.2f} | TOTAL ASSET: ${total_asset:.2f}"
-        sim_logs.append(log_message)
-        
         reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
-        if forced_signal is None and bot.action_space.get(action_idx, "hold") != "hold":
+        if forced_signal is None and bot.action_space.get(action_idx, "hold") == "hold":
             reward -= 0.001
         bot.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
         loss = bot.agent.train(batch_size=64)
         if loss is not None:
             losses.append(loss)
+        
+        # IMPORTANT: Append the final action to sim_logs.
+        log_message = f"{dates[-1]} | ACTION: {final_action} | PRICE: {price:.2f} | TOTAL ASSET: ${total_asset:.2f}"
+        sim_logs.append(log_message)
         
         with update_lock:
             sim_results.update({
@@ -212,6 +218,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
     
     logging.info("Simulation iteration %d completed.", iteration)
     return sim_results
+
 
 def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, start_date: str, end_date: Optional[str],
                    number_of_simulations: int, save_graphs: bool) -> None:

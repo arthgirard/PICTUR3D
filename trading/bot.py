@@ -115,11 +115,7 @@ class TradingBot:
                 return "sell_all"
         return None
 
-    def _execute_trade(self, action: Any, price: float, atr, mode_client: str) -> None:
-        """
-        Revamped trade execution incorporating risk management, profit-taking,
-        and a check to avoid selling when the position is near zero.
-        """
+    def _execute_trade(self, action: Any, price: float, atr, mode_client: str, features: np.ndarray) -> str:
         # Convert atr to a scalar if needed.
         if isinstance(atr, pd.Series):
             atr = float(atr.iloc[0])
@@ -147,7 +143,23 @@ class TradingBot:
         
         # Define a minimal position threshold.
         minimal_position = 1e-6
-
+    
+        # If the current position is negligible and the action is a sell variant,
+        # re-evaluate the decision by masking out the sell option.
+        if self.current_position <= minimal_position and trade_action in ["sell", "sell_all", "sell_partial"]:
+            import torch
+            state_tensor = torch.FloatTensor(features).unsqueeze(0).to(self.agent.device)
+            with torch.no_grad():
+                q_vals = self.agent.policy_net(state_tensor)
+            q_vals = q_vals.detach().cpu().numpy().flatten()
+            # Mask the sell action (assuming index 2 corresponds to "sell")
+            q_vals[2] = -float("inf")
+            new_action_idx = int(q_vals.argmax())
+            new_trade_action = self.action_space[new_action_idx]
+            logging.info(f"Re-evaluated action due to minimal position: {trade_action} -> {new_trade_action}")
+            trade_action = new_trade_action
+    
+        # Execute the trade based on the selected mode.
         if mode_client == "backtest":
             if trade_action == "buy":
                 trade_size = self.calculate_dynamic_trade_size(price, atr)
@@ -166,13 +178,12 @@ class TradingBot:
                     self.current_position += trade_size
                     logging.info(f"Backtest BUY: Bought {trade_size:.6f} SOL at {price:.2f} USD")
             elif trade_action in ["sell", "sell_all", "sell_partial"]:
-                # Do not sell if position is negligible.
                 if self.current_position <= minimal_position:
                     logging.info("No significant position to sell; holding.")
-                    return
+                    return "hold"
                 if trade_action == "sell_partial":
                     trade_size = self.current_position * 0.5  # Sell 50% of position.
-                else:  # "sell" or "sell_all"
+                else:
                     trade_size = self.current_position
                 proceeds = trade_size * price * (1 - self.trading_fee)
                 self.current_balance += proceeds
@@ -182,13 +193,12 @@ class TradingBot:
                 logging.info("Backtest HOLD: No action taken.")
         
         elif mode_client == "paper":
-            # Implement similar checks for paper trading.
             if trade_action == "buy":
                 self.paper_client.place_order("buy", 1.0, price)
             elif trade_action in ["sell", "sell_all", "sell_partial"]:
                 if self.current_position <= minimal_position:
                     logging.info("No significant position to sell (paper); holding.")
-                    return
+                    return "hold"
                 self.paper_client.place_order("sell", 1.0, price)
         
         elif mode_client == "live":
@@ -203,12 +213,15 @@ class TradingBot:
             elif trade_action in ["sell", "sell_all", "sell_partial"]:
                 if self.current_position <= minimal_position:
                     logging.info("No significant position to sell (live); holding.")
-                    return
+                    return "hold"
                 volume = round(self.current_position, 6)
                 if volume > 0:
                     result = self.kraken_client.place_order(pair=pair, ordertype="market", type_side="sell", volume=volume)
                     if result:
                         logging.info(f"Live SELL order executed: {result}")
+        
+        return trade_action
+
 
     def run_backtest(self, web_mode: bool = False, stop_event: Optional[Any] = None) -> Optional[Dict[str, Any]]:
         data = self.data_handler.download_data()
@@ -224,31 +237,40 @@ class TradingBot:
             if stop_event is not None and stop_event.is_set():
                 logging.info(f"Stop event detected at iteration {idx}.")
                 break
-
+    
             atr = row.get("ATR", 0.0)
             features = self._get_features(row)
             action_idx = self.agent.select_action(features)
             price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price, atr)
-            action_used = forced_signal if forced_signal == "sell_all" else self.action_space.get(action_idx, "hold")
-            if action_used != "hold":
+    
+            # Call _execute_trade to get the final action (after re-evaluation, if needed)
+            final_action = self._execute_trade(
+                action_idx if forced_signal is None else forced_signal, 
+                price, atr, mode_client="backtest", features=features
+            )
+    
+            # Record the trade only if a non-hold action was executed
+            if final_action != "hold":
                 date_val = pd.to_datetime(row['Date'])
                 trade_dates.append(date_val.strftime("%Y-%m-%d"))
                 trade_prices.append(price)
-                trade_signals.append(action_used)
-            self._execute_trade(action_idx if forced_signal is None else forced_signal, price, atr, mode_client="backtest")
+                trade_signals.append(final_action)
+    
             total_asset = self.current_balance + self.current_position * price
             dates.append(pd.to_datetime(row['Date']).strftime("%Y-%m-%d"))
             asset_values.append(total_asset)
             sol_prices.append(price)
+    
             reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
+            # Penalize holding slightly to encourage trading
             if forced_signal is None and self.action_space.get(action_idx, "hold") == "hold":
-                reward -= 0.001  # Penalize holding to encourage trading
+                reward -= 0.001
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
             loss = self.agent.train(batch_size=64)
             if loss is not None:
                 losses.append(loss)
-            logging.info(f"Date: {dates[-1]}, Action: {action_used}, Total Asset: {total_asset:.2f}")
+            logging.info(f"Date: {dates[-1]}, Executed Action: {final_action}, Total Asset: {total_asset:.2f}")
     
         final_asset = asset_values[-1] if asset_values else self.initial_balance
         net_profit = final_asset - self.initial_balance
@@ -314,37 +336,51 @@ class TradingBot:
         self.paper_client.balance = self.initial_balance
         self.paper_client.position = 0.0
         self.avg_entry_price = None
+    
         for idx, row in data.iterrows():
             atr = row.get("ATR", 0.0)
             features = self._get_features(row)
             action_idx = self.agent.select_action(features)
             price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price, atr)
-            action_used = forced_signal if forced_signal == "sell_all" else self.action_space.get(action_idx, "hold")
-            self._execute_trade(action_idx if forced_signal is None else forced_signal, price, atr, mode_client="paper")
+    
+            # Capture the final action after re‑evaluation
+            final_action = self._execute_trade(
+                action_idx if forced_signal is None else forced_signal,
+                price, atr, mode_client="paper", features=features
+            )
+            
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, 0, features, False)
             loss = self.agent.train(batch_size=64)
             if loss:
                 logging.info(f"Iteration {idx}, Loss: {loss:.6f}")
+            logging.info(f"Iteration {idx}, Executed Action: {final_action}, Price: {price:.2f}")
             time.sleep(0.1)
         self.save_state()
-
+    
     def run_live_trading(self) -> None:
         logging.info("Starting live trading mode...")
         data = self.data_handler.download_data()
         self.avg_entry_price = None
+    
         for idx, row in data.iterrows():
             atr = row.get("ATR", 0.0)
             features = self._get_features(row)
             action_idx = self.agent.select_action(features)
             price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price, atr)
-            action_used = forced_signal if forced_signal == "sell_all" else self.action_space.get(action_idx, "hold")
-            self._execute_trade(action_idx if forced_signal is None else forced_signal, price, atr, mode_client="live")
+    
+            # Capture the final executed action after any re‑evaluation
+            final_action = self._execute_trade(
+                action_idx if forced_signal is None else forced_signal,
+                price, atr, mode_client="live", features=features
+            )
+            
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, 0, features, False)
             loss = self.agent.train(batch_size=64)
             if loss:
                 logging.info(f"Iteration {idx}, Loss: {loss:.6f}")
+            logging.info(f"Iteration {idx}, Executed Action: {final_action}, Price: {price:.2f}")
             time.sleep(1)
         self.save_state()
 
