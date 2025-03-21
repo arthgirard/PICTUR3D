@@ -137,11 +137,12 @@ document.addEventListener("DOMContentLoaded", function() {
     $parametersCard.slideDown(300);
     $resultsCard.slideUp(300);
     $logsCard.slideUp(300).promise().done(function() {
-      startButton.textContent = "Start";
+      startButton.textContent = "START";
       startButton.classList.remove("btn-danger");
       startButton.classList.add("btn-primary");
       simulationStatus.textContent = "";
       resetAgentBtn.style.display = "none";
+      document.querySelector('.trading-mode-card').classList.remove('trading-running');
       waitForSimulationStop();
       startButton.disabled = false;
     });
@@ -162,10 +163,10 @@ document.addEventListener("DOMContentLoaded", function() {
         }
         
         if (firstLogReceived) {
-          simulationStatus.innerHTML = `<strong>Simulation ${iteration}/${totalSimulationsValue}</strong> | ` +
-            `<strong>Balance:</strong> $${finalBalance.toFixed(2)} | ` +
-            `<strong>Trades:</strong> ${data.num_trades} | ` +
-            `<strong>Return:</strong> ${parseFloat(data.percentage_return) ? parseFloat(data.percentage_return).toFixed(2) : "0"}%`;
+          simulationStatus.innerHTML = `<strong>SIMULATION ${iteration}/${totalSimulationsValue}</strong> | ` +
+            `<strong>BALANCE:</strong> $${finalBalance.toFixed(2)} | ` +
+            `<strong>TRADES:</strong> ${data.num_trades} | ` +
+            `<strong>RETURN:</strong> ${parseFloat(data.percentage_return) ? parseFloat(data.percentage_return).toFixed(2) : "0"}%`;
         }
         
         if (data.finished && !simulationFinishedUI) {
@@ -210,6 +211,8 @@ document.addEventListener("DOMContentLoaded", function() {
       console.warn("No chart data available to update.");
       return;
     }
+
+    Chart.defaults.font.family = 'Geist Mono, monospace';
   
     if (window.equityChart && window.equityChart.data) {
       window.equityChart.data.labels = data.dates;
@@ -222,7 +225,7 @@ document.addEventListener("DOMContentLoaded", function() {
         data: {
           labels: data.dates,
           datasets: [{
-            label: "Equity Curve (USD)",
+            label: "EQUITY (USD)",
             data: data.asset_values,
             borderColor: "rgba(75, 192, 192, 1)",
             fill: false,
@@ -248,7 +251,7 @@ document.addEventListener("DOMContentLoaded", function() {
         }));
         if (window.solPriceChart.data.datasets.length < 2) {
           window.solPriceChart.data.datasets.push({
-            label: "Trades",
+            label: "TRADES",
             data: tradeData,
             type: "line",
             parsing: { xAxisKey: "x", yAxisKey: "y" },
@@ -281,14 +284,14 @@ document.addEventListener("DOMContentLoaded", function() {
         data: {
           labels: data.dates,
           datasets: [{
-            label: "SOL Price (USD)",
+            label: "SOL PRICE (USD)",
             data: data.sol_prices,
             borderColor: "rgba(153, 102, 255, 1)",
             fill: false,
             pointRadius: 0
           },
           {
-            label: "Trades",
+            label: "TRADES",
             data: tradeData,
             type: "scatter",
             parsing: { xAxisKey: "x", yAxisKey: "y" },
@@ -329,7 +332,7 @@ document.addEventListener("DOMContentLoaded", function() {
         data: {
           labels: data.losses.map((_, i) => i + 1),
           datasets: [{
-            label: "Training Loss",
+            label: "TRAINING LOSS",
             data: data.losses,
             borderColor: "rgba(255, 99, 132, 1)",
             fill: false
@@ -363,7 +366,7 @@ document.addEventListener("DOMContentLoaded", function() {
             data: {
               labels: labels,
               datasets: [{
-                label: "Net Profit Over Time",
+                label: "NET PROFIT OVER TIME",
                 data: netProfits,
                 borderColor: "rgba(75, 192, 192, 1)",
                 fill: false
@@ -373,7 +376,7 @@ document.addEventListener("DOMContentLoaded", function() {
               responsive: true,
               title: {
                 display: true,
-                text: "Historical Agent Performance"
+                text: "HISTORICAL AGENT PERFORMANCE"
               }
             }
           });
@@ -403,14 +406,15 @@ document.addEventListener("DOMContentLoaded", function() {
         .then(() => {
           simulationRunning = true;
           localStorage.setItem("simulationRunning", "true");
-          startButton.textContent = "Stop";
+          startButton.textContent = "STOP";
           startButton.classList.remove("btn-primary");
           startButton.classList.add("btn-danger");
           startButton.style.display = "none";
+          document.querySelector('.trading-mode-card').classList.add('trading-running');
           $parametersCard.slideUp(300);
           $resultsCard.hide();
           $logsCard.hide();
-          simulationStatus.innerHTML = "Initializing agent <i class='fas fa-spinner fa-spin'></i>";
+          simulationStatus.innerHTML = "INITIALIZING AGENT <i class='fas fa-spinner fa-spin'></i>";
           const mode = modeSelect.value;
           const startDate = startDateInput.value;
           const endDate = endDateInput.value;
@@ -461,7 +465,7 @@ document.addEventListener("DOMContentLoaded", function() {
         $parametersCard.slideDown(300);
         $resultsCard.slideUp(300);
         $logsCard.slideUp(300);
-        startButton.textContent = "Start";
+        startButton.textContent = "START";
         startButton.classList.remove("btn-danger");
         startButton.classList.add("btn-primary");
         simulationStatus.textContent = "";
@@ -485,9 +489,10 @@ document.addEventListener("DOMContentLoaded", function() {
   });
 
   if (simulationRunning) {
-    startButton.textContent = "Stop";
+    startButton.textContent = "STOP";
     startButton.classList.remove("btn-primary");
     startButton.classList.add("btn-danger");
+    document.querySelector('.trading-mode-card').classList.add('trading-running');
     $parametersCard.hide();
     resetAgentBtn.style.display = "inline-block";
     fetch("/live_logs")
@@ -508,9 +513,10 @@ document.addEventListener("DOMContentLoaded", function() {
         pollLiveLogs();
       });
   } else {
-    startButton.textContent = "Start";
+    startButton.textContent = "START";
     startButton.classList.remove("btn-danger");
     startButton.classList.add("btn-primary");
+    document.querySelector('.trading-mode-card').classList.remove('trading-running');
     $parametersCard.show();
     resetAgentBtn.style.display = "none";
   }

@@ -75,7 +75,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
         asset_values.append(total_asset)
         sol_prices.append(price)
         
-        log_message = f"{dates[-1]} | Action: {action_used} | Price: {price:.2f} | Total Asset: ${total_asset:.2f}"
+        log_message = f"{dates[-1]} | ACTION: {action_used} | PRICE: {price:.2f} | TOTAL ASSET: ${total_asset:.2f}"
         sim_logs.append(log_message)
         
         reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
