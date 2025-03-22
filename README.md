@@ -3,7 +3,7 @@ Third version (first public version) of a personal algorithmic SOLANA trading re
 
 ## Getting started
 1. Install Python 3.10
-2. Add API keys to a ".env" file in /trading **(DO NOT EVER COMMIT)**  
+2. Add API keys to a ".env" file in /trading **(DO NOT EVER COMMIT AND NOT MANDATORY FOR NOW)**  
    2a. KRAKEN_API_KEY  
    2b. KRAKEN_API_SECRET  
 3. In a terminal, execute `pip install -r requirements.txt`
