@@ -211,17 +211,35 @@ document.addEventListener("DOMContentLoaded", function() {
       console.warn("No chart data available to update.");
       return;
     }
-
+    
+    // Debug log to verify buy_hold_equity data is present.
+    console.log("Buy & Hold Equity Data:", data.buy_hold_equity);
+    
     Chart.defaults.font.family = 'Geist Mono, monospace';
-    decimation = {
+    const decimation = {
       enabled: true,
       algorithm: 'lttb',
       samples: 100
     };
   
+    // Equity Chart: Update or create with two datasets.
     if (window.equityChart && window.equityChart.data) {
       window.equityChart.data.labels = data.dates;
+      // Update the simulation equity curve.
       window.equityChart.data.datasets[0].data = data.asset_values;
+      // If the second dataset doesn't exist, push it.
+      if (window.equityChart.data.datasets.length < 2) {
+        window.equityChart.data.datasets.push({
+          label: "Buy & Hold Equity",
+          data: data.buy_hold_equity,
+          borderColor: "rgba(255, 99, 132, 1)",
+          fill: false,
+          pointRadius: 0,
+          borderDash: [5, 5]
+        });
+      } else {
+        window.equityChart.data.datasets[1].data = data.buy_hold_equity;
+      }
       window.equityChart.update();
     } else {
       const ctx1 = document.getElementById("equityChart").getContext("2d");
@@ -229,21 +247,34 @@ document.addEventListener("DOMContentLoaded", function() {
         type: "line",
         data: {
           labels: data.dates,
-          datasets: [{
-            label: "EQUITY (USD)",
-            data: data.asset_values,
-            borderColor: "rgba(75, 192, 192, 1)",
-            fill: false,
-            pointRadius: 0
-          }]
+          datasets: [
+            {
+              label: "EQUITY (USD)",
+              data: data.asset_values,
+              borderColor: "rgba(75, 192, 192, 1)",
+              fill: false,
+              pointRadius: 0
+            },
+            {
+              label: "BUY & HOLD (USD)",
+              data: data.buy_hold_equity,
+              borderColor: "rgba(255, 99, 132, 1)",
+              fill: false,
+              pointRadius: 0,
+              borderDash: [5, 5]
+            }
+          ]
         },
-        options: {responsive: true},
+        options: {
+          responsive: true
+        },
         plugins: {
           decimation: decimation
         }
       });
     }
-  
+    
+    // SOL Price Chart update remains unchanged.
     if (window.solPriceChart && window.solPriceChart.data) {
       window.solPriceChart.data.labels = data.dates;
       window.solPriceChart.data.datasets[0].data = data.sol_prices;
@@ -287,24 +318,26 @@ document.addEventListener("DOMContentLoaded", function() {
         type: "line",
         data: {
           labels: data.dates,
-          datasets: [{
-            label: "SOL PRICE (USD)",
-            data: data.sol_prices,
-            borderColor: "rgba(153, 102, 255, 1)",
-            fill: false,
-            pointRadius: 0
-          },
-          {
-            label: "TRADES",
-            data: tradeData,
-            type: "scatter",
-            parsing: { xAxisKey: "x", yAxisKey: "y" },
-            pointRadius: 5,
-            pointBackgroundColor: tradeData.map(pt =>
-              pt.signal.toLowerCase().startsWith("buy") ? "green" : "red"
-            ),
-            showLine: false
-          }]
+          datasets: [
+            {
+              label: "SOL PRICE (USD)",
+              data: data.sol_prices,
+              borderColor: "rgba(153, 102, 255, 1)",
+              fill: false,
+              pointRadius: 0
+            },
+            {
+              label: "TRADES",
+              data: tradeData,
+              type: "scatter",
+              parsing: { xAxisKey: "x", yAxisKey: "y" },
+              pointRadius: 5,
+              pointBackgroundColor: tradeData.map(pt =>
+                pt.signal.toLowerCase().startsWith("buy") ? "green" : "red"
+              ),
+              showLine: false
+            }
+          ]
         },
         options: {
           responsive: true,
@@ -320,7 +353,8 @@ document.addEventListener("DOMContentLoaded", function() {
         }
       });
     }
-  
+    
+    // Loss Chart update remains unchanged.
     if (window.lossChart && window.lossChart.data) {
       window.lossChart.data.labels = data.losses.map((_, i) => i + 1);
       window.lossChart.data.datasets[0].data = data.losses;
@@ -344,7 +378,7 @@ document.addEventListener("DOMContentLoaded", function() {
         }
       });
     }
-  }
+  }  
   
   function fetchAndUpdatePerformanceHistory() {
     fetch("/agent_performance")
