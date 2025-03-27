@@ -30,73 +30,99 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
                             final_iteration: bool = False) -> Dict:
     if data is None:
         data = bot.data_handler.download_data()
-    
+
     final_date_val = data.iloc[-1]['Date']
     if isinstance(final_date_val, pd.Series):
         final_date_val = final_date_val.iloc[0]
     final_date = pd.to_datetime(final_date_val)
     final_date_str = final_date.strftime("%Y-%m-%d")
-    
+
+
     dates, asset_values, sol_prices = [], [], []
     trade_dates, trade_prices, trade_signals = [], [], []
     losses = []
-    
+
     bot.current_balance = bot.initial_balance
     bot.current_position = 0.0
     bot.avg_entry_price = None
 
     logging.info("Starting simulation loop over %d rows.", len(data))
+
     for idx, row in data.iterrows():
         if stop_evt.is_set():
             logging.info("Stop event detected at row %d; exiting simulation loop.", idx)
             break
 
-        atr = row.get("ATR", 0.0)
-        features = bot._get_features(row)
-        action_idx = bot.agent.select_action(features)
+        date_val = row['Date']
+        if isinstance(date_val, pd.Series):
+            date_val = date_val.iloc[0]
+        date_val = pd.to_datetime(date_val)
         price = float(row['Close'].iloc[0]) if isinstance(row['Close'], pd.Series) else float(row['Close'])
+        atr = row.get("ATR", 0.0)
+
+        # Get current and next state features
+        current_features = bot._get_features(row)
+        if idx < len(data) - 1:
+            next_row = data.iloc[idx + 1]
+            next_features = bot._get_features(next_row)
+            done = False
+        else:
+            next_features = current_features
+            done = True
+
+        # Decide action
+        action_idx = bot.agent.select_action(current_features)
         forced_signal = bot._check_risk_management(price, atr)
-        
-        # Capture the final executed action after re‑evaluation.
         final_action = bot._execute_trade(
             action_idx if forced_signal is None else forced_signal,
-            price, atr, mode_client="backtest", features=features
+            price, atr, mode_client="backtest", features=current_features
         )
-        
-        # Record the trade only if a non-hold action was executed.
+
+        # Log trade
         if final_action != "hold":
-            date_val = pd.to_datetime(row['Date'])
-            if isinstance(date_val, pd.Series):
-                date_val = date_val.iloc[0]
             trade_dates.append(date_val.strftime("%Y-%m-%d"))
             trade_prices.append(price)
             trade_signals.append(final_action)
-        
+
+        # Compute total asset value
         total_asset = bot.current_balance + bot.current_position * price
-        date_val = pd.to_datetime(row['Date'])
-        if isinstance(date_val, pd.Series):
-            date_val = date_val.iloc[0]
         dates.append(date_val.strftime("%Y-%m-%d"))
         asset_values.append(total_asset)
         sol_prices.append(price)
-        
-        reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
-        if forced_signal is None and bot.action_space.get(action_idx, "hold") == "hold":
-            reward -= 0.001
-        bot.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
+
+        # Compute reward: asset delta (optionally include drawdown penalty)
+        if len(asset_values) > 1:
+            prev_asset = asset_values[-2]
+            drawdown_penalty = max(0, (prev_asset - total_asset) / prev_asset)
+            reward = (total_asset - prev_asset) / prev_asset - 0.5 * drawdown_penalty
+        else:
+            reward = 0.0
+
+        # Store experience
+        bot.agent.replay_buffer.add(current_features, action_idx, reward, next_features, done)
+
+        # Train agent
         loss = bot.agent.train(batch_size=64)
         if loss is not None:
             losses.append(loss)
-        
-        # IMPORTANT: Append the final action to sim_logs.
+
+        # Buy & Hold tracking
+        if sol_prices:
+            first_price = sol_prices[0]
+            current_buy_hold = [bot.initial_balance * (p / first_price) for p in sol_prices]
+        else:
+            current_buy_hold = []
+
+        # Logging
         log_message = f"{dates[-1]} | ACTION: {final_action} | PRICE: {price:.2f} | TOTAL ASSET: ${total_asset:.2f}"
         sim_logs.append(log_message)
-        
+
         with update_lock:
             sim_results.update({
                 "dates": dates,
                 "asset_values": asset_values,
                 "sol_prices": sol_prices,
+                "buy_hold_equity": current_buy_hold,
                 "trade_dates": trade_dates,
                 "trade_prices": trade_prices,
                 "trade_signals": trade_signals,
@@ -104,20 +130,21 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
                 "final_balance": bot.current_balance,
                 "final_position": bot.current_position,
                 "num_trades": len(trade_dates),
-                "percentage_return": ((bot.current_balance + bot.current_position * price - bot.initial_balance) / bot.initial_balance) * 100,
-                "net_profit": (bot.current_balance + bot.current_position * price) - bot.initial_balance,
+                "percentage_return": ((total_asset - bot.initial_balance) / bot.initial_balance) * 100,
+                "net_profit": total_asset - bot.initial_balance,
                 "max_drawdown": 0,
                 "finished": False,
                 "iteration": iteration
             })
-        
+
         if dates[-1] == final_date_str:
             logging.info("Final date reached: %s. Finalizing simulation iteration.", final_date_str)
             break
-        
+
         if bot.mode != "backtest":
             time.sleep(0.2)
-    
+
+    # Post-simulation metrics
     final_asset = asset_values[-1] if asset_values else bot.initial_balance
     net_profit = final_asset - bot.initial_balance
     percentage_return = (net_profit / bot.initial_balance) * 100
@@ -129,33 +156,23 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
         drawdown = (peak - value) / peak if peak else 0
         if drawdown > max_drawdown:
             max_drawdown = drawdown
-    num_trades = len(trade_dates)
+
     trade_history = [{"date": d, "price": p, "signal": s} for d, p, s in zip(trade_dates, trade_prices, trade_signals)]
-    
-    if final_iteration:
-        sim_results.update({
-            "net_profit": net_profit,
-            "percentage_return": percentage_return,
-            "max_drawdown": max_drawdown,
-            "num_trades": num_trades,
-            "trade_history": trade_history,
-            "finished": True,
-            "iteration": iteration
-        })
-    else:
-        sim_results.update({
-            "net_profit": net_profit,
-            "percentage_return": percentage_return,
-            "max_drawdown": max_drawdown,
-            "num_trades": num_trades,
-            "trade_history": trade_history,
-            "finished": False,
-            "iteration": iteration
-        })
-    
+
+    sim_results.update({
+        "net_profit": net_profit,
+        "percentage_return": percentage_return,
+        "max_drawdown": max_drawdown,
+        "num_trades": len(trade_dates),
+        "trade_history": trade_history,
+        "buy_hold_equity": current_buy_hold,
+        "finished": final_iteration,
+        "iteration": iteration
+    })
+
     bot.save_state()
     save_performance_metrics(dict(sim_results))
-    
+
     if save_graphs:
         try:
             import matplotlib.pyplot as plt
@@ -165,8 +182,10 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             
             dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in dates]
             
+            # Equity chart with simulation and Buy & Hold curves.
             fig, ax = plt.subplots()
             ax.plot(dates_dt, asset_values, label="Equity Curve (USD)")
+            ax.plot(dates_dt, current_buy_hold, label="Buy & Hold Equity", linestyle="--")
             ax.set_xlabel("Date")
             ax.set_ylabel("Total Asset (USD)")
             ax.set_title("Equity Curve")
@@ -200,7 +219,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
                 ax.legend()
                 fig.savefig(os.path.join(iteration_folder, "loss_chart.png"))
                 plt.close(fig)
-            
+                
             stats = {
                 "Final Balance": bot.current_balance,
                 "Final Position": bot.current_position,
@@ -215,17 +234,18 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             logging.info("Simulation iteration %d results saved to folder.", iteration)
         except Exception as e:
             logging.error("Error while saving simulation outputs: %s", e)
-    
-    logging.info("Simulation iteration %d completed.", iteration)
-    return sim_results
 
+    return sim_results
 
 def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, start_date: str, end_date: Optional[str],
                    number_of_simulations: int, save_graphs: bool) -> None:
     stop_evt.clear()
     
-    bot_for_data = TradingBot(mode=mode, device="cpu", start_date=start_date, end_date=end_date)
-    data = bot_for_data.data_handler.download_data()
+    # Create a persistent TradingBot instance to retain training across iterations.
+    bot = TradingBot(mode=mode, device="cpu", start_date=start_date, end_date=end_date)
+    if os.path.exists("agent.pth"):
+        bot.load_state()
+    data = bot.data_handler.download_data()
     
     batch_folder = None
     if save_graphs:
@@ -247,10 +267,6 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
         sim_logs[:] = []
         
         logging.info("Starting simulation iteration %d of %d", i+1, number_of_simulations)
-        bot = TradingBot(mode=mode, device="cpu", start_date=start_date, end_date=end_date)
-        if os.path.exists("agent.pth"):
-            bot.load_state()
-        
         final_iteration = (i == number_of_simulations - 1)
         run_backtest_simulation(bot, stop_evt, sim_results, sim_logs, save_graphs, data=data,
                                 iteration=i+1, batch_folder=batch_folder, final_iteration=final_iteration)
@@ -258,8 +274,7 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
         if stop_evt.is_set():
             logging.info("Stop event detected after iteration %d; exiting.", i+1)
             break
-        
-        if not stop_evt.is_set():
+        else:
             stop_evt.clear()
     
     if not stop_evt.is_set():
@@ -267,7 +282,6 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
     time.sleep(1)
 
 def save_performance_metrics(new_metrics: Dict) -> None:
-    # Only record the final net profit and the current timestamp.
     record = {
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "net_profit": new_metrics.get("net_profit", 0)
@@ -351,7 +365,7 @@ def delete_agent() -> Any:
     
     confirmation = request.json.get("confirmation", False)
     if confirmation:
-        files_to_delete = ["agent.pth", "replay_buffer.pkl", "scaler.pkl", "performance_history.json"]
+        files_to_delete = ["agent.pth", "scaler.pkl", "performance_history.json"]
         for file in files_to_delete:
             if os.path.exists(file):
                 try:
@@ -359,7 +373,7 @@ def delete_agent() -> Any:
                     logging.info("Deleted file: %s", file)
                 except Exception as e:
                     logging.error("Error deleting file %s: %s", file, e)
-        return jsonify({"status": "Agent, replay buffer, scaler, and performance history deleted successfully."})
+        return jsonify({"status": "Agent, scaler, and performance history deleted successfully."})
     else:
         return jsonify({"status": "Deletion canceled."}), 400
 

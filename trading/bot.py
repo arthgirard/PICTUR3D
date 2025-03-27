@@ -1,6 +1,7 @@
 import time
 import json
 import logging
+import math
 import numpy as np
 import pandas as pd
 from typing import Any, Optional, Dict
@@ -64,17 +65,9 @@ class TradingBot:
         """
         Compute the dynamic trade size based on the current balance, price, ATR (volatility), and fees.
         The idea is to risk a fixed percentage (risk_percentage) of your balance.
-        
-        - risk_amount: dollar amount you are willing to risk.
-        - stop_loss_distance: set to ATR or a minimum value (here 0.5% of price) if ATR is very low.
-        - fee_cost: cost per unit due to trading fees.
-        
-        The trade size (in asset units) is the risk_amount divided by the effective risk per unit.
         """
-        # Ensure atr is a scalar float.
         if isinstance(atr, pd.Series):
             atr = float(atr.iloc[0])
-        
         risk_amount = self.current_balance * self.risk_percentage
         min_stop_loss = 0.005 * price  # minimum stop loss (0.5% of price)
         stop_loss_distance = max(atr, min_stop_loss)
@@ -92,8 +85,8 @@ class TradingBot:
         
         # Only trigger risk management if a position is open.
         if self.current_position > 0 and self.avg_entry_price is not None:
-            # Set a floor loss of 3% below the average entry price.
-            loss_limit = 0.03  
+            # Allow a 5% loss from the entry price as a floor.
+            loss_limit = 0.05  
             floor_stop = self.avg_entry_price * (1 - loss_limit)
             
             # Initialize or update the maximum price reached since entry.
@@ -101,12 +94,15 @@ class TradingBot:
                 self.max_price_since_entry = self.avg_entry_price
             self.max_price_since_entry = max(self.max_price_since_entry, current_price)
             
-            # When the price is above the entry, use a trailing stop based on a fraction of ATR.
-            if current_price > self.avg_entry_price:
-                # Use half of the ATR instead of full ATR to give the position more room.
-                trailing_stop = self.max_price_since_entry - 0.5 * atr
-                # Make sure the trailing stop doesn't go below the entry price.
-                trailing_stop = max(trailing_stop, self.avg_entry_price)
+            # Introduce a profit threshold: only enable a trailing stop once the price has risen at least 2% above entry.
+            profit_threshold = 0.02  
+            if current_price >= self.avg_entry_price * (1 + profit_threshold):
+                # Use a trailing stop based on a fraction of ATR (here, 0.5) once in profit.
+                trailing_factor = 0.5  
+                trailing_stop = self.max_price_since_entry - trailing_factor * atr
+                # Ensure the trailing stop does not drop below a minimum (e.g., half the profit threshold gain).
+                min_trailing_stop = self.avg_entry_price * (1 + profit_threshold / 2)
+                trailing_stop = max(trailing_stop, min_trailing_stop)
             else:
                 trailing_stop = floor_stop
 
@@ -116,13 +112,11 @@ class TradingBot:
         return None
 
     def _execute_trade(self, action: Any, price: float, atr, mode_client: str, features: np.ndarray) -> str:
-        # Convert atr to a scalar if needed.
         if isinstance(atr, pd.Series):
             atr = float(atr.iloc[0])
         
         forced_signal = self._check_risk_management(price, atr)
         
-        # Determine the trade action.
         if forced_signal == "sell_all":
             trade_action = "sell_all"
         else:
@@ -141,25 +135,19 @@ class TradingBot:
                 else:
                     trade_action = self.action_space.get(action, "hold")
         
-        # Define a minimal position threshold.
         minimal_position = 1e-6
-    
-        # If the current position is negligible and the action is a sell variant,
-        # re-evaluate the decision by masking out the sell option.
         if self.current_position <= minimal_position and trade_action in ["sell", "sell_all", "sell_partial"]:
             import torch
             state_tensor = torch.FloatTensor(features).unsqueeze(0).to(self.agent.device)
             with torch.no_grad():
                 q_vals = self.agent.policy_net(state_tensor)
             q_vals = q_vals.detach().cpu().numpy().flatten()
-            # Mask the sell action (assuming index 2 corresponds to "sell")
             q_vals[2] = -float("inf")
             new_action_idx = int(q_vals.argmax())
             new_trade_action = self.action_space[new_action_idx]
             logging.info(f"Re-evaluated action due to minimal position: {trade_action} -> {new_trade_action}")
             trade_action = new_trade_action
-    
-        # Execute the trade based on the selected mode.
+        
         if mode_client == "backtest":
             if trade_action == "buy":
                 trade_size = self.calculate_dynamic_trade_size(price, atr)
@@ -178,11 +166,12 @@ class TradingBot:
                     self.current_position += trade_size
                     logging.info(f"Backtest BUY: Bought {trade_size:.6f} SOL at {price:.2f} USD")
             elif trade_action in ["sell", "sell_all", "sell_partial"]:
+                minimal_position = 1e-6
                 if self.current_position <= minimal_position:
                     logging.info("No significant position to sell; holding.")
                     return "hold"
                 if trade_action == "sell_partial":
-                    trade_size = self.current_position * 0.5  # Sell 50% of position.
+                    trade_size = self.current_position * 0.5
                 else:
                     trade_size = self.current_position
                 proceeds = trade_size * price * (1 - self.trading_fee)
@@ -196,6 +185,7 @@ class TradingBot:
             if trade_action == "buy":
                 self.paper_client.place_order("buy", 1.0, price)
             elif trade_action in ["sell", "sell_all", "sell_partial"]:
+                minimal_position = 1e-6
                 if self.current_position <= minimal_position:
                     logging.info("No significant position to sell (paper); holding.")
                     return "hold"
@@ -211,6 +201,7 @@ class TradingBot:
                     if result:
                         logging.info(f"Live BUY order executed: {result}")
             elif trade_action in ["sell", "sell_all", "sell_partial"]:
+                minimal_position = 1e-6
                 if self.current_position <= minimal_position:
                     logging.info("No significant position to sell (live); holding.")
                     return "hold"
@@ -221,7 +212,6 @@ class TradingBot:
                         logging.info(f"Live SELL order executed: {result}")
         
         return trade_action
-
 
     def run_backtest(self, web_mode: bool = False, stop_event: Optional[Any] = None) -> Optional[Dict[str, Any]]:
         data = self.data_handler.download_data()
@@ -244,28 +234,42 @@ class TradingBot:
             price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price, atr)
     
-            # Call _execute_trade to get the final action (after re-evaluation, if needed)
             final_action = self._execute_trade(
                 action_idx if forced_signal is None else forced_signal, 
                 price, atr, mode_client="backtest", features=features
             )
     
-            # Record the trade only if a non-hold action was executed
             if final_action != "hold":
                 date_val = pd.to_datetime(row['Date'])
+                if isinstance(date_val, pd.Series):
+                    date_val = date_val.iloc[0]
                 trade_dates.append(date_val.strftime("%Y-%m-%d"))
                 trade_prices.append(price)
                 trade_signals.append(final_action)
     
             total_asset = self.current_balance + self.current_position * price
-            dates.append(pd.to_datetime(row['Date']).strftime("%Y-%m-%d"))
+            date_val = pd.to_datetime(row['Date'])
+            if isinstance(date_val, pd.Series):
+                date_val = date_val.iloc[0]
+            dates.append(date_val.strftime("%Y-%m-%d"))
             asset_values.append(total_asset)
             sol_prices.append(price)
     
-            reward = (asset_values[-1] - asset_values[-2]) / asset_values[-2] if idx > 0 else 0
-            # Penalize holding slightly to encourage trading
+            # Compute reward using log returns
+            if idx > 0:
+                reward = math.log(asset_values[-1] / asset_values[-2])
+            else:
+                reward = 0
+            
+            # Apply a small penalty for holding
             if forced_signal is None and self.action_space.get(action_idx, "hold") == "hold":
                 reward -= 0.001
+            
+            # Apply a risk penalty if holding a position (scaled by atr relative to price)
+            if self.current_position > 0:
+                risk_penalty = 0.1 * (atr / price)
+                reward -= risk_penalty
+            
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
             loss = self.agent.train(batch_size=64)
             if loss is not None:
@@ -313,9 +317,13 @@ class TradingBot:
             import matplotlib.pyplot as plt
             fig, axs = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
             axs[0].plot(dates, asset_values, label="Equity Curve (USD)")
+            first_price = sol_prices[0]
+            buy_hold_equity = [self.initial_balance * (price / first_price) for price in sol_prices]
+            axs[0].plot(dates, buy_hold_equity, label="Buy & Hold Equity", linestyle="--")
             axs[0].set_ylabel("Total Asset (USD)")
             axs[0].set_title("Equity Curve")
             axs[0].legend()
+    
             axs[1].plot(dates, sol_prices, label="SOL Price (USD)", color="blue")
             for i, d in enumerate(trade_dates):
                 if trade_signals[i].startswith("buy"):
@@ -326,10 +334,11 @@ class TradingBot:
             axs[1].set_ylabel("SOL Price (USD)")
             axs[1].set_title("SOL Price with Trade Signals")
             axs[1].legend()
+    
             plt.tight_layout()
             plt.show()
             self.save_state()
-
+    
     def run_paper_trading(self) -> None:
         logging.info("Starting paper trading simulation...")
         data = self.data_handler.download_data()
@@ -344,7 +353,6 @@ class TradingBot:
             price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price, atr)
     
-            # Capture the final action after re‑evaluation
             final_action = self._execute_trade(
                 action_idx if forced_signal is None else forced_signal,
                 price, atr, mode_client="paper", features=features
@@ -370,7 +378,6 @@ class TradingBot:
             price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price, atr)
     
-            # Capture the final executed action after any re‑evaluation
             final_action = self._execute_trade(
                 action_idx if forced_signal is None else forced_signal,
                 price, atr, mode_client="live", features=features
@@ -383,9 +390,9 @@ class TradingBot:
             logging.info(f"Iteration {idx}, Executed Action: {final_action}, Price: {price:.2f}")
             time.sleep(1)
         self.save_state()
-
+    
     def save_state(self) -> None:
         self.agent.save()
-
+    
     def load_state(self) -> None:
         self.agent.load()
