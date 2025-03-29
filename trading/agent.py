@@ -8,7 +8,6 @@ import torch.optim as optim
 import logging
 from torch.nn.utils import clip_grad_norm_
 from typing import Tuple, List, Any, Optional
-
 import math
 
 class NoisyLinear(nn.Module):
@@ -158,14 +157,13 @@ class PrioritizedReplayBuffer:
 class TradingAgent:
     def __init__(self, input_dim: int, action_dim: int, use_lstm: bool = True, 
                  lr: float = 0.0001,
-                 gamma: float = 0.95, tau: float = 0.005, device: str = "cpu", buffer_capacity: int = 1000) -> None:
+                 gamma: float = 0.99, tau: float = 0.005, device: str = "cpu", buffer_capacity: int = 10000) -> None:
         self.device = device
         self.action_dim = action_dim
         self.gamma = gamma
         self.tau = tau
         self.epsilon = 0.90
         self.epsilon_min = 0.01
-        # Use a multiplicative decay factor (e.g., 0.995 per training step)
         self.epsilon_decay_rate = 0.995
 
         self.policy_net = DuelingDQN(input_dim, action_dim, use_lstm).to(self.device)
@@ -223,18 +221,20 @@ class TradingAgent:
         loss.backward()
         clip_grad_norm_(self.policy_net.parameters(), 1.0)
         self.optimizer.step()
+        
+        # Epsilon decay update
+        self.epsilon = max(self.epsilon * self.epsilon_decay_rate, self.epsilon_min)
+    
+        # Soft update of target network
+        self._soft_update_target()
     
         # Update priorities
         td_errors = (current_q - target_q).detach().cpu().numpy().squeeze()
         new_priorities = np.abs(td_errors) + 1e-6
         self.replay_buffer.update_priorities(indices, new_priorities)
     
-        # Soft update of target network
-        self._soft_update_target()
-    
         return loss.item()
     
-
     def _soft_update_target(self) -> None:
         for target_param, param in zip(self.target_net.parameters(), self.policy_net.parameters()):
             target_param.data.copy_(target_param.data * (1 - self.tau) + param.data * self.tau)
