@@ -255,21 +255,24 @@ class TradingBot:
             asset_values.append(total_asset)
             sol_prices.append(price)
     
-            # Compute reward using log returns
+            # Compute reward using log returns to measure relative asset change
             if idx > 0:
                 reward = math.log(asset_values[-1] / asset_values[-2])
             else:
                 reward = 0
-            
-            # Apply a small penalty for holding
+    
+            # Apply a small penalty for holding (encouraging active trading)
             if forced_signal is None and self.action_space.get(action_idx, "hold") == "hold":
                 reward -= 0.001
-            
-            # Apply a risk penalty if holding a position (scaled by atr relative to price)
+    
+            # Apply a risk penalty when a position is held (scaled by ATR relative to price)
             if self.current_position > 0:
                 risk_penalty = 0.1 * (atr / price)
                 reward -= risk_penalty
-            
+    
+            # Clip rewards to reduce variance and prevent extreme updates
+            reward = max(min(reward, 0.05), -0.05)
+    
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
             loss = self.agent.train(batch_size=64)
             if loss is not None:
