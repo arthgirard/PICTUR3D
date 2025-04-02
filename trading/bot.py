@@ -223,6 +223,9 @@ class TradingBot:
         self.current_position = 0.0
         self.avg_entry_price = None
     
+        # Get the initial price for the buy-and-hold baseline.
+        first_price = float(data.iloc[0]['Close'])
+    
         for idx, row in data.iterrows():
             if stop_event is not None and stop_event.is_set():
                 logging.info(f"Stop event detected at iteration {idx}.")
@@ -255,22 +258,29 @@ class TradingBot:
             asset_values.append(total_asset)
             sol_prices.append(price)
     
-            # Compute reward using log returns to measure relative asset change
+            # Calculate the reward based on log returns.
             if idx > 0:
                 reward = math.log(asset_values[-1] / asset_values[-2])
             else:
                 reward = 0
     
-            # Apply a small penalty for holding (encouraging active trading)
+            # Apply a small penalty for holding to encourage active decision-making.
             if forced_signal is None and self.action_space.get(action_idx, "hold") == "hold":
                 reward -= 0.001
     
-            # Apply a risk penalty when a position is held (scaled by ATR relative to price)
+            # Apply a risk penalty when a position is held (scaled by ATR relative to price).
             if self.current_position > 0:
                 risk_penalty = 0.1 * (atr / price)
                 reward -= risk_penalty
     
-            # Clip rewards to reduce variance and prevent extreme updates
+            # Compare against buy-and-hold: compute what a buy-and-hold strategy would yield.
+            buy_hold_equity = self.initial_balance * (price / first_price)
+            if total_asset > buy_hold_equity:
+                # Add a bonus proportional to the logarithmic outperformance.
+                bonus = 0.1 * math.log(total_asset / buy_hold_equity)
+                reward += bonus
+    
+            # Clip rewards to prevent extreme updates.
             reward = max(min(reward, 0.05), -0.05)
     
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
@@ -321,8 +331,8 @@ class TradingBot:
             fig, axs = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
             axs[0].plot(dates, asset_values, label="Equity Curve (USD)")
             first_price = sol_prices[0]
-            buy_hold_equity = [self.initial_balance * (price / first_price) for price in sol_prices]
-            axs[0].plot(dates, buy_hold_equity, label="Buy & Hold Equity", linestyle="--")
+            buy_hold_equity_list = [self.initial_balance * (p / first_price) for p in sol_prices]
+            axs[0].plot(dates, buy_hold_equity_list, label="Buy & Hold Equity", linestyle="--")
             axs[0].set_ylabel("Total Asset (USD)")
             axs[0].set_title("Equity Curve")
             axs[0].legend()
@@ -341,6 +351,7 @@ class TradingBot:
             plt.tight_layout()
             plt.show()
             self.save_state()
+    
     
     def run_paper_trading(self) -> None:
         logging.info("Starting paper trading simulation...")
