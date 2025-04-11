@@ -110,29 +110,29 @@ class PrioritizedReplayBuffer:
         self.pos = (self.pos + 1) % self.capacity
 
     def sample(self, batch_size, beta=0.4):
-       if len(self.buffer) == self.capacity:
-           priorities = self.priorities
-       else:
-           priorities = self.priorities[:len(self.buffer)]
-       probs = priorities ** self.alpha
-       probs_sum = probs.sum()
-       if np.isnan(probs_sum) or probs_sum == 0:
-           probs = np.ones_like(probs) / len(probs)
-       else:
-           probs /= probs_sum
-       indices = np.random.choice(len(self.buffer), batch_size, p=probs)
-       samples = [self.buffer[idx] for idx in indices]
-       total = len(self.buffer)
-       weights = (total * probs[indices]) ** (-beta)
-       weights /= weights.max()
-       weights = np.array(weights, dtype=np.float32)
-       batch = list(zip(*samples))
-       states = np.array(batch[0])
-       actions = np.array(batch[1])
-       rewards = np.array(batch[2])
-       next_states = np.array(batch[3])
-       dones = np.array(batch[4])
-       return states, actions, rewards, next_states, dones, indices, weights
+        if len(self.buffer) == self.capacity:
+            priorities = self.priorities
+        else:
+            priorities = self.priorities[:len(self.buffer)]
+        probs = priorities ** self.alpha
+        probs_sum = probs.sum()
+        if np.isnan(probs_sum) or probs_sum == 0:
+            probs = np.ones_like(probs) / len(probs)
+        else:
+            probs /= probs_sum
+        indices = np.random.choice(len(self.buffer), batch_size, p=probs)
+        samples = [self.buffer[idx] for idx in indices]
+        total = len(self.buffer)
+        weights = (total * probs[indices]) ** (-beta)
+        weights /= weights.max()
+        weights = np.array(weights, dtype=np.float32)
+        batch = list(zip(*samples))
+        states = np.array(batch[0])
+        actions = np.array(batch[1])
+        rewards = np.array(batch[2])
+        next_states = np.array(batch[3])
+        dones = np.array(batch[4])
+        return states, actions, rewards, next_states, dones, indices, weights
 
     def update_priorities(self, indices: List[int], priorities: np.ndarray) -> None:
         for idx, priority in zip(indices, priorities):
@@ -189,10 +189,8 @@ class TradingAgent:
         if len(self.replay_buffer.buffer) < batch_size:
             return None
     
-        # Sample a batch from the replay buffer
         states, actions, rewards, next_states, dones, indices, weights = self.replay_buffer.sample(batch_size, beta)
     
-        # Convert to tensors
         states = torch.FloatTensor(states).to(self.device)
         next_states = torch.FloatTensor(next_states).to(self.device)
         actions = torch.LongTensor(actions).unsqueeze(1).to(self.device)
@@ -200,35 +198,30 @@ class TradingAgent:
         dones = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
         weights = torch.FloatTensor(weights).unsqueeze(1).to(self.device)
     
-        # Reset noise for both networks
+        # Reset noise for both networks (important when using NoisyLinear layers)
         self.policy_net.reset_noise()
         self.target_net.reset_noise()
     
-        # Compute current Q-values
         current_q = self.policy_net(states).gather(1, actions)
     
-        # Compute next Q-values (Double DQN style)
         with torch.no_grad():
             next_actions = self.policy_net(next_states).argmax(1, keepdim=True)
             next_q = self.target_net(next_states).gather(1, next_actions)
             target_q = rewards + (1 - dones) * self.gamma * next_q
     
-        # Compute loss (with importance sampling weights)
         loss = (weights * F.mse_loss(current_q, target_q, reduction='none')).mean()
     
-        # Backpropagation
         self.optimizer.zero_grad()
         loss.backward()
         clip_grad_norm_(self.policy_net.parameters(), 1.0)
         self.optimizer.step()
         
-        # Epsilon decay update
+        # Decay epsilon over time
         self.epsilon = max(self.epsilon * self.epsilon_decay_rate, self.epsilon_min)
     
-        # Soft update of target network
+        # Soft update the target network using the corrected implementation:
         self._soft_update_target()
     
-        # Update priorities
         td_errors = (current_q - target_q).detach().cpu().numpy().squeeze()
         new_priorities = np.abs(td_errors) + 1e-6
         self.replay_buffer.update_priorities(indices, new_priorities)
@@ -236,28 +229,22 @@ class TradingAgent:
         return loss.item()
     
     def _soft_update_target(self) -> None:
+        # Update target network parameters: target = tau * policy + (1-tau) * target
         for target_param, param in zip(self.target_net.parameters(), self.policy_net.parameters()):
-            target_param.data.copy_(target_param.data * (1 - self.tau) + param.data * self.tau)
+            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
     def save(self, path: str = "agent.pth") -> None:
         try:
-            torch.save({
-                'policy_net': self.policy_net.state_dict(),
-                'target_net': self.target_net.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
-                'epsilon': self.epsilon
-            }, path)
-            logging.info("Agent saved.")
+            torch.save(self.policy_net.state_dict(), path)
+            logging.info(f"Agent saved to {path}")
         except Exception as e:
             logging.error(f"Error saving agent: {e}")
 
     def load(self, path: str = "agent.pth") -> None:
         try:
-            checkpoint = torch.load(path, map_location=self.device)
-            self.policy_net.load_state_dict(checkpoint['policy_net'])
-            self.target_net.load_state_dict(checkpoint['target_net'])
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
-            self.epsilon = checkpoint.get('epsilon', self.epsilon)
-            logging.info("Agent loaded.")
+            state_dict = torch.load(path, map_location=self.device)
+            self.policy_net.load_state_dict(state_dict)
+            self.target_net.load_state_dict(state_dict)
+            logging.info(f"Agent loaded from {path}")
         except Exception as e:
             logging.error(f"Error loading agent: {e}")
