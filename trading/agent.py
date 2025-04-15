@@ -60,7 +60,7 @@ class DuelingDQN(nn.Module):
         self.use_lstm = use_lstm
         self.fc1 = NoisyLinear(input_dim, 128)
         self.fc2 = NoisyLinear(128, 128)
-        self.dropout = nn.Dropout(0.2)
+        # Dropout removed to stabilize Q-value estimates
         lstm_output_dim = 128
         if self.use_lstm:
             self.lstm = nn.LSTM(128, 128, batch_first=True)
@@ -72,7 +72,6 @@ class DuelingDQN(nn.Module):
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = self.dropout(x)
         if self.use_lstm:
             x = x.unsqueeze(1)
             x, _ = self.lstm(x)
