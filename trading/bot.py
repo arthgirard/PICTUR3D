@@ -313,8 +313,8 @@ class TradingBot:
                 bonus = 0.1 * math.log(total_asset / buy_hold_equity)
                 reward += bonus
     
-            # Clip rewards to prevent extreme updates.
-            reward = max(min(reward, 0.05), -0.05)
+            # Removed reward clipping so the learning signal better reflects actual performance.
+    
     
             self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
             loss = self.agent.train(batch_size=64)
