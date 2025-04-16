@@ -386,9 +386,38 @@ document.addEventListener("DOMContentLoaded", function() {
       .then(history => {
         const labels = history.map(item => item.timestamp);
         const netProfits = history.map(item => item.net_profit);
+
+        // compute least‑squares trend line
+        const n = netProfits.length;
+        const xs = netProfits.map((_, i) => i);
+        let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+        for (let i = 0; i < n; i++) {
+          const x = xs[i], y = netProfits[i];
+          sumX += x;
+          sumY += y;
+          sumXY += x * y;
+          sumXX += x * x;
+        }
+        const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+        const intercept = (sumY - slope * sumX) / n;
+        const trendData = xs.map(x => intercept + slope * x);
+
         if (window.performanceHistoryChart) {
+          const ds = window.performanceHistoryChart.data.datasets;
+          ds[0].data = netProfits;
+          if (ds.length < 2) {
+            ds.push({
+              label: "TREND LINE",
+              data: trendData,
+              borderColor: "rgba(255, 206, 86, 1)",
+              borderDash: [5, 5],
+              fill: false,
+              pointRadius: 0
+            });
+          } else {
+            ds[1].data = trendData;
+          }
           window.performanceHistoryChart.data.labels = labels;
-          window.performanceHistoryChart.data.datasets[0].data = netProfits;
           window.performanceHistoryChart.update();
         } else {
           const ctx = document.getElementById("agentPerformanceChart").getContext("2d");
@@ -396,12 +425,23 @@ document.addEventListener("DOMContentLoaded", function() {
             type: "line",
             data: {
               labels: labels,
-              datasets: [{
-                label: "NET PROFIT OVER TIME",
-                data: netProfits,
-                borderColor: "rgba(75, 192, 192, 1)",
-                fill: false
-              }]
+              datasets: [
+                {
+                  label: "NET PROFIT OVER TIME",
+                  data: netProfits,
+                  borderColor: "rgba(75, 192, 192, 1)",
+                  fill: false,
+                  pointRadius: 0
+                },
+                {
+                  label: "TREND LINE",
+                  data: trendData,
+                  borderColor: "rgba(255, 206, 86, 1)",
+                  borderDash: [5, 5],
+                  fill: false,
+                  pointRadius: 0
+                }
+              ]
             },
             options: {
               responsive: true,
