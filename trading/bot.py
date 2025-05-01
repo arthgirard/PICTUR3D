@@ -4,59 +4,126 @@ import logging
 import math
 import numpy as np
 import pandas as pd
+import datetime
+import pickle, os
 from typing import Any, Optional, Dict
 
 from trading.data_handler import DataHandler
 from trading.sentiment import GDELTNewsClient, SentimentAnalyzer
 from trading.agent import TradingAgent
-from trading.api_clients import PaperTradingClient, KrakenClient
-from config import INITIAL_BALANCE, DEFAULT_START_DATE, DEFAULT_END_DATE
+from config import (
+    INITIAL_BALANCE,
+    DEFAULT_START_DATE,
+    DEFAULT_END_DATE,
+    ALPACA_API_KEY,
+    ALPACA_API_SECRET,
+)
 
 class TradingBot:
-    def __init__(self, mode: str = "backtest", device: str = "cpu", 
-                 start_date: str = DEFAULT_START_DATE, end_date: Optional[str] = DEFAULT_END_DATE) -> None:
+    @staticmethod
+    def _to_scalar(x):
+        if isinstance(x, pd.Series):
+            return float(x.iloc[0])
+        if isinstance(x, (np.generic, np.ndarray)):
+            return float(np.asarray(x).item())
+        return float(x)
+    
+    def __init__(
+        self,
+        mode: str = "backtest",
+        device: str = "cpu",
+        start_date: str = DEFAULT_START_DATE,
+        end_date: Optional[str] = DEFAULT_END_DATE,
+    ) -> None:
+        # sentiment cache on disk
+        self.sentiment_cache_file = "sentiment_cache.json"
+        self.sentiment_cache: Dict[str, float] = {}              # keep type hints
+
+        if os.path.exists(self.sentiment_cache_file):
+            try:
+                with open(self.sentiment_cache_file, "r") as f:
+                    self.sentiment_cache = json.load(f)
+                logging.info("Loaded %d cached sentiment scores.",
+                             len(self.sentiment_cache))
+            except Exception as e:
+                logging.warning("Could not load sentiment cache: %s", e)
         self.mode = mode
         self.device = device
+        self.scaler = None
+        if os.path.exists("scaler.pkl"):
+            with open("scaler.pkl", "rb") as f:
+                self.scaler = pickle.load(f)
+            logging.info("Feature scaler loaded – live data will be normalised.")
+
+        # Data + news
         self.data_handler = DataHandler(start_date=start_date, end_date=end_date)
         self.news_client = GDELTNewsClient()
         self.sentiment_analyzer = SentimentAnalyzer(device=self.device)
-        self.feature_cols = ['SMA_20', 'RSI', 'MACD', 'Signal', 'Middle_Band', 
-                             'Upper_Band', 'Lower_Band', 'Volatility', 'Volume', 'ATR']
-        self.input_dim = len(self.feature_cols) + 1  # extra sentiment score
-        self.action_space: Dict[int, str] = {0: "hold", 1: "buy", 2: "sell", 3: "short"}
-        self.agent = TradingAgent(input_dim=self.input_dim, action_dim=len(self.action_space), device=self.device)
+
+        # Agent
+        self.feature_cols = [
+            "SMA_20", "RSI", "MACD", "Signal",
+            "Middle_Band", "Upper_Band", "Lower_Band",
+            "Volatility", "Volume", "ATR",
+        ]
+        self.input_dim = len(self.feature_cols) + 1  # + sentiment score
+        self.action_space = {0: "hold", 1: "buy", 2: "sell", 3: "short"}
+        self.agent = TradingAgent(
+            input_dim=self.input_dim,
+            action_dim=len(self.action_space),
+            device=self.device,
+        )
+
+        # Account state
         self.initial_balance = INITIAL_BALANCE
         self.current_balance = self.initial_balance
         self.current_position = 0.0
         self.trading_fee = 0.001
         self.avg_entry_price: Optional[float] = None
         self.sentiment_cache: Dict[str, float] = {}
+
+        # Execution clients
         if self.mode == "paper":
-            self.paper_client = PaperTradingClient(initial_balance=self.initial_balance)
-        if self.mode == "live":
-            from config import KRAKEN_API_KEY, KRAKEN_API_SECRET
+            from trading.api_clients import AlpacaPaperClient
+            self.paper_client = AlpacaPaperClient(
+                api_key=ALPACA_API_KEY,
+                api_secret=ALPACA_API_SECRET,
+            )
+        elif self.mode == "live":
+            from trading.api_clients import KrakenClient, KRAKEN_API_KEY, KRAKEN_API_SECRET
             if not KRAKEN_API_KEY or not KRAKEN_API_SECRET:
-                raise ValueError("KRAKEN_API_KEY and/or KRAKEN_API_SECRET not found in environment variables.")
-            self.kraken_client = KrakenClient(api_key=KRAKEN_API_KEY, api_secret=KRAKEN_API_SECRET)
+                raise ValueError("Kraken keys are missing.")
+            self.kraken_client = KrakenClient(
+                api_key=KRAKEN_API_KEY,
+                api_secret=KRAKEN_API_SECRET,
+            )
+            
+    # helper: write cache to disk
+    def save_sentiment_cache(self) -> None:
+        try:
+            with open(self.sentiment_cache_file, "w") as f:
+                json.dump(self.sentiment_cache, f, indent=2)
+            logging.info("Sentiment cache saved (%d dates).",
+                         len(self.sentiment_cache))
+        except Exception as e:
+            logging.error("Error saving sentiment cache: %s", e)
 
     def _get_features(self, row: pd.Series) -> np.ndarray:
-        tech_features = row[self.feature_cols].values.astype(np.float32)
-        date_val = pd.to_datetime(row['Date'])
-        if isinstance(date_val, pd.Series):
+        tech = np.array([self._to_scalar(row[col]) for col in self.feature_cols],
+                        dtype=np.float32)
+        tech = self._normalize_live(tech)
+    
+        date_val = pd.to_datetime(row["Date"])
+        if isinstance(date_val, pd.Series): 
             date_val = date_val.iloc[0]
         date_str = date_val.strftime("%Y-%m-%d")
-        if date_str in self.sentiment_cache:
-            sentiment_score = self.sentiment_cache[date_str]
-        else:
-            # Query now uses "solana" for sentiment analysis.
-            if self.mode in ["backtest", "paper"]:
-                headlines = self.news_client.fetch_headlines(query="solana", page_size=5, date=date_val)
-            else:
-                headlines = self.news_client.fetch_headlines(query="solana", page_size=5)
-            sentiment_score = self.sentiment_analyzer.compute_sentiment(headlines)
-            self.sentiment_cache[date_str] = sentiment_score
-        features = np.concatenate([tech_features, np.array([sentiment_score], dtype=np.float32)])
-        return features
+        sentiment = self.sentiment_cache.get(date_str)
+        if sentiment is None:
+            headlines = self.news_client.fetch_headlines("solana", 5,
+                                                         pd.to_datetime(date_str))
+            sentiment = self.sentiment_analyzer.compute_sentiment(headlines)
+            self.sentiment_cache[date_str] = sentiment
+        return np.concatenate([tech, [sentiment]], dtype=np.float32)
 
     # New risk parameter – percentage of the current balance risked per trade
     risk_percentage: float = 0.01  # 1% risk per trade
@@ -108,6 +175,43 @@ class TradingBot:
                 logging.info(f"(Short risk) Price {current_price:.2f} >= ceiling stop {ceiling_stop:.2f}")
                 return "cover_all"
         return None
+    
+    # ---------------------------------------------------------------------
+    # apply same µ/σ normalisation on the fly to live features (µ & σ Series)
+    # ---------------------------------------------------------------------
+    def _normalize_live(self, feat: np.ndarray) -> np.ndarray:
+        if not self.scaler:
+            return feat.astype(np.float32, copy=True)
+
+        norm = np.empty(len(feat), dtype=np.float32)
+
+        for i, col in enumerate(self.feature_cols):
+            v = feat[i]
+            if isinstance(v, pd.Series):
+                v = v.iloc[0]
+            if isinstance(v, (np.ndarray, list, tuple)):
+                v = np.asarray(v).flatten()[0]
+            v = float(v)
+
+            if col in self.scaler:
+                stats = self.scaler[col]
+
+                µ = stats["mean"]
+                σ = stats["std"]
+
+                if isinstance(µ, pd.Series):
+                    µ = µ.iloc[0]
+                if isinstance(σ, pd.Series):
+                    σ = σ.iloc[0]
+
+                µ = float(µ)
+                σ = float(σ) + 1e-8
+
+                norm[i] = (v - µ) / σ
+            else:
+                norm[i] = v
+
+        return norm
 
     def _execute_trade(self, action: Any, price: float, atr, mode_client: str, features: np.ndarray) -> str:
         minimal_position = 1e-6
@@ -186,27 +290,33 @@ class TradingBot:
                 logging.info("Backtest HOLD: No action taken.")
                 
         elif mode_client == "paper":
+            cash, pos = self.paper_client.account_state()
+        
             if trade_action == "buy":
-                self.paper_client.place_order("buy", 1.0, price)
+                qty = self.calculate_dynamic_trade_size(price, atr)
+                if qty > 1e-6:
+                    self.paper_client.place_order("buy", qty, price)
+        
             elif trade_action in ["sell", "sell_all", "sell_partial"]:
-                if self.current_position > minimal_position:
-                    self.paper_client.place_order("sell", 1.0, price)
-                else:
-                    logging.info("Paper Trading SELL: No long position to sell.")
+                if pos > 1e-6:
+                    qty = pos if trade_action == "sell_all" else pos * 0.5
+                    self.paper_client.place_order("sell", qty, price)
+        
             elif trade_action == "short":
-                if abs(self.current_position) < minimal_position:
-                    trade_size = self.calculate_dynamic_trade_size(price, atr)
-                    self.paper_client.balance += trade_size * price * (1 - self.trading_fee)
-                    self.current_position = -trade_size
-                    logging.info(f"Paper Trading SHORT: Shorted {trade_size:.6f} SOL at {price:.2f} USD")
-                else:
-                    logging.info("Paper Trading SHORT: Existing position, cannot short.")
+                if abs(pos) < 1e-6:
+                    qty = self.calculate_dynamic_trade_size(price, atr)
+                    if qty > 1e-6:
+                        self.paper_client.open_short(qty, price)
+        
             elif trade_action == "cover_all":
-                if self.current_position < -minimal_position:
-                    # Cover short using a buy order (simulation)
-                    self.paper_client.place_order("buy", 1.0, price)
-                else:
-                    logging.info("Paper Trading COVER: No short position to cover.")
+                if pos < -1e-6:
+                    self.paper_client.close_short(price)
+        
+            # Sync local copy
+            self.current_balance, self.current_position = self.paper_client.account_state()
+            if abs(self.current_position) < 1e-6:
+                self.avg_entry_price = None
+                          
         elif mode_client == "live":
             pair = "SOLUSD"
             if trade_action == "buy":
@@ -245,7 +355,18 @@ class TradingBot:
                     logging.info("Live COVER: No short position to cover.")
         return trade_action
     
-
+    def _build_feature_vector(self, live_row: pd.Series, dt: datetime) -> np.ndarray:
+        tech = np.array([self._to_scalar(live_row[col]) for col in self.feature_cols],
+                        dtype=np.float32)
+        tech = self._normalize_live(tech)
+    
+        date_key = dt.strftime("%Y-%m-%d")
+        if date_key not in self.sentiment_cache:
+            headlines = self.news_client.fetch_headlines("solana", 5, dt)
+            self.sentiment_cache[date_key] = self.sentiment_analyzer.compute_sentiment(headlines)
+        sentiment = self.sentiment_cache[date_key]
+        return np.concatenate([tech, [sentiment]], dtype=np.float32)
+    
     def run_backtest(self, web_mode: bool = False, stop_event: Optional[Any] = None) -> Optional[Dict[str, Any]]:
         data = self.data_handler.download_data()
         asset_values, dates = [], []
@@ -386,32 +507,38 @@ class TradingBot:
             self.save_state()
     
     
-    def run_paper_trading(self) -> None:
-        logging.info("Starting paper trading simulation...")
-        data = self.data_handler.download_data()
-        self.paper_client.balance = self.initial_balance
-        self.paper_client.position = 0.0
-        self.avg_entry_price = None
+    def run_paper_trading_alpaca(self) -> None:
+        """Live 1‑min loop with Alpaca paper account."""
+        logging.info("Starting Alpaca paper trading (1‑min intervals)…")
+        self.paper_client.reset_account(self.initial_balance)
     
-        for idx, row in data.iterrows():
-            atr = row.get("ATR", 0.0)
-            features = self._get_features(row)
+        for bar in self.paper_client.stream_bars("SOL/USD"):  # 1‑min bars
+            price = bar.close
+            atr = self._rolling_atr.update_and_get(bar)        # helper
+    
+            # Build feature vector
+            row = self._realtime_df.update_and_get_row(bar)    # helper
+            features = self._build_feature_vector(row, bar.t)
+    
+            # Pick action
             action_idx = self.agent.select_action(features)
-            price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
-            forced_signal = self._check_risk_management(price, atr)
-    
+            forced = self._check_risk_management(price, atr)
             final_action = self._execute_trade(
-                action_idx if forced_signal is None else forced_signal,
-                price, atr, mode_client="paper", features=features
+                action_idx if forced is None else forced,
+                price, atr, mode_client="paper", features=features,
             )
-            
-            self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, 0, features, False)
-            loss = self.agent.train(batch_size=64)
-            if loss:
-                logging.info(f"Iteration {idx}, Loss: {loss:.6f}")
-            logging.info(f"Iteration {idx}, Executed Action: {final_action}, Price: {price:.2f}")
-            time.sleep(0.1)
-        self.save_state()
+    
+            # Light training
+            self.agent.replay_buffer.add(features, action_idx, 0, features, False)
+            self.agent.train(batch_size=64)
+    
+            cash, pos = self.paper_client.account_state()
+            logging.info(
+                "%s | %s | price=%.2f | cash=%.2f | pos=%.4f",
+                bar.t.strftime("%Y-%m-%d %H:%M"),
+                final_action.upper(),
+                price, cash, pos,
+            )
     
     def run_live_trading(self) -> None:
         logging.info("Starting live trading mode...")
@@ -440,6 +567,7 @@ class TradingBot:
     
     def save_state(self) -> None:
         self.agent.save()
+        self.save_sentiment_cache()
     
     def load_state(self) -> None:
         self.agent.load()
