@@ -73,6 +73,11 @@ class TradingBot:
             action_dim=len(self.action_space),
             device=self.device,
         )
+        
+        # pick up last trained state if any
+        if os.path.exists("agent.pth"):
+            self.load_state()
+
 
         # Account state
         self.initial_balance = INITIAL_BALANCE
@@ -488,6 +493,8 @@ class TradingBot:
             logging.info("Performance metrics saved.")
         except Exception as e:
             logging.error(f"Error saving performance metrics: {e}")
+            
+        self.save_state()
     
         if web_mode:
             return performance_metrics
@@ -512,10 +519,8 @@ class TradingBot:
             axs[1].set_ylabel("SOL Price (USD)")
             axs[1].set_title("SOL Price with Trade Signals")
             axs[1].legend()
-    
             plt.tight_layout()
             plt.show()
-            self.save_state()
     
     
     def run_paper_trading_alpaca(self) -> None:
