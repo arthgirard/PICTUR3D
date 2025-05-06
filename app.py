@@ -24,9 +24,7 @@ update_lock = Lock()
 simulation_process = None
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-
-ALL_ACTIONS = ["buy", "sell_all", "short", "cover_all", "hold", "long"]
-ACTION_WIDTH = 14
+ACTION_WIDTH = 12
 
 def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, sim_logs: Any,
                             save_graphs: bool = True, data: Optional[pd.DataFrame] = None,
