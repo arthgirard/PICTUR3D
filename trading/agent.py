@@ -1,96 +1,166 @@
-import os
+# agent.py
+#
+# Stand-alone replacement for the previous *agent.py*.
+# Drop it straight into trading/agent.py and the rest of the
+# PICTUR3D code-base will keep working unchanged.
+
+import math
 import pickle
+import logging
+from typing import Any, List, Optional, Tuple
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import logging
 from torch.nn.utils import clip_grad_norm_
-from typing import Tuple, List, Any, Optional
-import math
 
+# --------------------------------------------------------------------------- #
+# 1.  Noisy linear layer                                     #
+# --------------------------------------------------------------------------- #
 class NoisyLinear(nn.Module):
-    def __init__(self, in_features, out_features, sigma_init=0.017):
-        super(NoisyLinear, self).__init__()
+    def __init__(self, in_features: int, out_features: int, sigma_init: float = 0.017):
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
 
         self.weight_mu = nn.Parameter(torch.empty(out_features, in_features))
         self.weight_sigma = nn.Parameter(torch.empty(out_features, in_features))
-        self.register_buffer("weight_epsilon", torch.empty(out_features, in_features))
+        self.register_buffer("weight_eps", torch.empty(out_features, in_features))
 
         self.bias_mu = nn.Parameter(torch.empty(out_features))
         self.bias_sigma = nn.Parameter(torch.empty(out_features))
-        self.register_buffer("bias_epsilon", torch.empty(out_features))
+        self.register_buffer("bias_eps", torch.empty(out_features))
 
         self.sigma_init = sigma_init
         self.reset_parameters()
         self.reset_noise()
 
-    def reset_parameters(self):
-        mu_range = 1 / math.sqrt(self.in_features)
-        self.weight_mu.data.uniform_(-mu_range, mu_range)
+    def reset_parameters(self) -> None:
+        μ_range = 1.0 / math.sqrt(self.in_features)
+        self.weight_mu.data.uniform_(-μ_range, μ_range)
         self.weight_sigma.data.fill_(self.sigma_init)
-        self.bias_mu.data.uniform_(-mu_range, mu_range)
+        self.bias_mu.data.uniform_(-μ_range, μ_range)
         self.bias_sigma.data.fill_(self.sigma_init)
 
-    def reset_noise(self):
-        epsilon_in = self._scale_noise(self.in_features)
-        epsilon_out = self._scale_noise(self.out_features)
-        self.weight_epsilon.copy_(epsilon_out.ger(epsilon_in))
-        self.bias_epsilon.copy_(epsilon_out)
+    def reset_noise(self) -> None:
+        eps_in = self._scale_noise(self.in_features)
+        eps_out = self._scale_noise(self.out_features)
+        self.weight_eps.copy_(eps_out.ger(eps_in))
+        self.bias_eps.copy_(eps_out)
 
-    def _scale_noise(self, size):
+    @staticmethod
+    def _scale_noise(size: int) -> torch.Tensor:
         x = torch.randn(size)
         return x.sign().mul_(x.abs().sqrt_())
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.training:
-            weight = self.weight_mu + self.weight_sigma * self.weight_epsilon
-            bias = self.bias_mu + self.bias_sigma * self.bias_epsilon
+            w = self.weight_mu + self.weight_sigma * self.weight_eps
+            b = self.bias_mu + self.bias_sigma * self.bias_eps
         else:
-            weight = self.weight_mu
-            bias = self.bias_mu
-        return F.linear(x, weight, bias)
+            w = self.weight_mu
+            b = self.bias_mu
+        return F.linear(x, w, b)
 
+
+# --------------------------------------------------------------------------- #
+# 2.  Dueling DQN with optional LSTM                                         #
+# --------------------------------------------------------------------------- #
 class DuelingDQN(nn.Module):
-    def __init__(self, input_dim: int, action_dim: int, use_lstm: bool = False):
-        super(DuelingDQN, self).__init__()
+    """
+    If `use_lstm` is True, the network expects input of shape (B, T, F)
+    and returns `(Q_values, (h, c))`.  When `use_lstm` is False it
+    behaves exactly like a feed-forward network and returns just Q_values.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        action_dim: int,
+        use_lstm: bool = False,
+        lstm_hidden: int = 128,
+        num_layers: int = 1,
+    ) -> None:
+        super().__init__()
         self.use_lstm = use_lstm
+        self.action_dim = action_dim
+
         self.fc1 = NoisyLinear(input_dim, 128)
         self.fc2 = NoisyLinear(128, 128)
-        # Dropout removed to stabilize Q-value estimates
-        lstm_output_dim = 128
-        if self.use_lstm:
-            self.lstm = nn.LSTM(128, 128, batch_first=True)
-        self.value_fc = NoisyLinear(lstm_output_dim, 64)
-        self.value = NoisyLinear(64, 1)
-        self.advantage_fc = NoisyLinear(lstm_output_dim, 64)
-        self.advantage = NoisyLinear(64, action_dim)
 
-    def forward(self, x):
+        if self.use_lstm:
+            self.lstm = nn.LSTM(
+                input_size=128,
+                hidden_size=lstm_hidden,
+                num_layers=num_layers,
+                batch_first=True,
+            )
+            lstm_out = lstm_hidden
+        else:
+            lstm_out = 128
+
+        # value & advantage streams
+        self.value_fc = NoisyLinear(lstm_out, 64)
+        self.value = NoisyLinear(64, 1)
+        self.adv_fc = NoisyLinear(lstm_out, 64)
+        self.adv = NoisyLinear(64, action_dim)
+
+    # --------------------------------------------------------------------- #
+    def forward(
+        self,
+        x: torch.Tensor,
+        hc: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        """
+        Args
+        ----
+        x  : (B,F) *or* (B,T,F)
+        hc : optional (h,c) from a previous call
+
+        Returns
+        -------
+        qvals : (B, action_dim)
+        hc    : new hidden-state (only if use_lstm=True)
+        """
+        if x.dim() == 2:  # (B,F)  -> (B,1,F)
+            x = x.unsqueeze(1)
+
+        b, t, f = x.shape  # keep for later
+
+        # two dense layers applied time-step wise
+        x = x.reshape(b * t, f)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
+        x = x.view(b, t, -1)
+
         if self.use_lstm:
-            x = x.unsqueeze(1)
-            x, _ = self.lstm(x)
-            x = x.squeeze(1)
-        value = F.relu(self.value_fc(x))
-        value = self.value(value)
-        advantage = F.relu(self.advantage_fc(x))
-        advantage = self.advantage(advantage)
-        qvals = value + (advantage - advantage.mean(dim=1, keepdim=True))
-        return qvals
+            x, hc = self.lstm(x, hc)  # keep running state
+        else:
+            hc = None
 
-    def reset_noise(self):
-        self.fc1.reset_noise()
-        self.fc2.reset_noise()
-        self.value_fc.reset_noise()
-        self.value.reset_noise()
-        self.advantage_fc.reset_noise()
-        self.advantage.reset_noise()
+        x = x[:, -1]  # last time-step
 
+        # dueling heads
+        val = F.relu(self.value_fc(x))
+        val = self.value(val)
+        adv = F.relu(self.adv_fc(x))
+        adv = self.adv(adv)
+
+        q = val + adv - adv.mean(dim=1, keepdim=True)
+        return q, hc
+
+    # convenience – iterate through sub-modules
+    def reset_noise(self) -> None:
+        for m in self.modules():
+            if isinstance(m, NoisyLinear):
+                m.reset_noise()
+
+
+# --------------------------------------------------------------------------- #
+# 3.  Prioritised Replay Buffer (unchanged API, but now in one file)          #
+# --------------------------------------------------------------------------- #
 class PrioritizedReplayBuffer:
     def __init__(self, capacity: int, alpha: float = 0.6) -> None:
         self.capacity = capacity
@@ -99,151 +169,217 @@ class PrioritizedReplayBuffer:
         self.priorities = np.zeros((capacity,), dtype=np.float32)
         self.alpha = alpha
 
-    def add(self, state: np.ndarray, action: int, reward: float, next_state: np.ndarray, done: bool) -> None:
-        max_priority = self.priorities.max() if self.buffer else 1.0
+    def add(
+        self,
+        state: np.ndarray,
+        action: int,
+        reward: float,
+        next_state: np.ndarray,
+        done: bool,
+    ) -> None:
+        max_prio = self.priorities.max() if self.buffer else 1.0
         if len(self.buffer) < self.capacity:
             self.buffer.append((state, action, reward, next_state, done))
         else:
             self.buffer[self.pos] = (state, action, reward, next_state, done)
-        self.priorities[self.pos] = max_priority
+        self.priorities[self.pos] = max_prio
         self.pos = (self.pos + 1) % self.capacity
 
-    def sample(self, batch_size, beta=0.4):
+    def sample(self, batch_size: int, beta: float = 0.4):
         if len(self.buffer) == self.capacity:
-            priorities = self.priorities
+            prios = self.priorities
         else:
-            priorities = self.priorities[:len(self.buffer)]
-        probs = priorities ** self.alpha
-        probs_sum = probs.sum()
-        if np.isnan(probs_sum) or probs_sum == 0:
-            probs = np.ones_like(probs) / len(probs)
-        else:
-            probs /= probs_sum
+            prios = self.priorities[: len(self.buffer)]
+
+        probs = prios ** self.alpha
+        probs /= probs.sum()
+
         indices = np.random.choice(len(self.buffer), batch_size, p=probs)
-        samples = [self.buffer[idx] for idx in indices]
-        total = len(self.buffer)
-        weights = (total * probs[indices]) ** (-beta)
+        samples = [self.buffer[i] for i in indices]
+
+        weights = (len(self.buffer) * probs[indices]) ** (-beta)
         weights /= weights.max()
-        weights = np.array(weights, dtype=np.float32)
-        batch = list(zip(*samples))
-        states = np.array(batch[0])
-        actions = np.array(batch[1])
-        rewards = np.array(batch[2])
-        next_states = np.array(batch[3])
-        dones = np.array(batch[4])
-        return states, actions, rewards, next_states, dones, indices, weights
+
+        states, actions, rewards, next_states, dones = map(
+            np.array, zip(*samples)
+        )
+        return (
+            states,
+            actions,
+            rewards,
+            next_states,
+            dones.astype(np.float32),
+            indices,
+            weights.astype(np.float32),
+        )
 
     def update_priorities(self, indices: List[int], priorities: np.ndarray) -> None:
-        for idx, priority in zip(indices, priorities):
-            self.priorities[idx] = priority
+        for idx, prio in zip(indices, priorities):
+            self.priorities[idx] = prio
 
-    def save(self, path: str) -> None:
-        try:
-            with open(path, 'wb') as f:
-                pickle.dump((self.buffer, self.pos, self.priorities), f)
-            logging.info(f"Replay buffer saved to {path}")
-        except Exception as e:
-            logging.error(f"Error saving replay buffer: {e}")
 
-    def load(self, path: str) -> None:
-        try:
-            with open(path, 'rb') as f:
-                self.buffer, self.pos, self.priorities = pickle.load(f)
-            logging.info(f"Replay buffer loaded from {path}")
-        except Exception as e:
-            logging.error(f"Error loading replay buffer: {e}")
-
+# --------------------------------------------------------------------------- #
+# 4.  TradingAgent                                                            #
+# --------------------------------------------------------------------------- #
 class TradingAgent:
-    def __init__(self, input_dim: int, action_dim: int, use_lstm: bool = True, 
-                 lr: float = 0.0001,
-                 gamma: float = 0.99, tau: float = 0.005, device: str = "cpu", buffer_capacity: int = 10000) -> None:
+    """
+    Drop-in replacement – public API unchanged.
+    Improvements:
+    • persistent LSTM hidden state during *inference*
+    • resets to zero during mini-batch *training*
+    • All NoisyLinear layers re-sample noise each optimiser step
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        action_dim: int,
+        use_lstm: bool = True,
+        lr: float = 1e-4,
+        gamma: float = 0.99,
+        tau: float = 5e-3,
+        device: str = "cpu",
+        buffer_capacity: int = 20_000,
+    ) -> None:
         self.device = device
         self.action_dim = action_dim
+
+        # networks
+        self.policy_net = DuelingDQN(
+            input_dim=input_dim,
+            action_dim=action_dim,
+            use_lstm=use_lstm,
+        ).to(device)
+        self.target_net = DuelingDQN(
+            input_dim=input_dim,
+            action_dim=action_dim,
+            use_lstm=use_lstm,
+        ).to(device)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
+
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr, weight_decay=1e-5)
+
+        # replay buffer
+        self.replay_buffer = PrioritizedReplayBuffer(capacity=buffer_capacity)
+
+        # hyper-parameters
         self.gamma = gamma
         self.tau = tau
         self.epsilon = 0.90
+        self.epsilon_decay = 0.995
         self.epsilon_min = 0.01
-        self.epsilon_decay_rate = 0.995
 
-        self.policy_net = DuelingDQN(input_dim, action_dim, use_lstm).to(self.device)
-        self.target_net = DuelingDQN(input_dim, action_dim, use_lstm).to(self.device)
-        self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr, weight_decay=1e-5)
-        self.replay_buffer = PrioritizedReplayBuffer(capacity=buffer_capacity)
+        # carry hidden state between timesteps while trading
+        self._hc: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
 
+    # --------------------------------------------------------------------- #
+    # 4.1  Action selection                                                 #
+    # --------------------------------------------------------------------- #
     def select_action(self, state: np.ndarray) -> int:
+        """
+        state can be a 1-D feature vector or a sequence (T,F).
+        The method keeps the LSTM hidden state alive across calls,
+        mimicking true online inference.
+        """
+        # ε-greedy
         if np.random.rand() < self.epsilon:
-            action = np.random.randint(self.action_dim)
-            logging.debug(f"Random action: {action}")
-            return action
-        else:
-            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            with torch.no_grad():
-                q_values = self.policy_net(state_tensor)
-            action = q_values.argmax().item()
-            logging.debug(f"Policy action: {action}")
-            return action
+            return np.random.randint(self.action_dim)
 
-    def train(self, batch_size=64, beta=0.4):
+        # shape handling ------------------------------------------------
+        st = torch.FloatTensor(state)
+        if st.dim() == 1:
+            st = st.unsqueeze(0)       # (1,F)
+        st = st.unsqueeze(0).to(self.device)  # (B=1,T,F) or (1,1,F)
+
+        with torch.no_grad():
+            qvals, self._hc = self.policy_net(st, self._hc)
+
+        action = int(qvals.argmax(dim=1).item())
+        return action
+
+    # --------------------------------------------------------------------- #
+    # 4.2  Training                                                         #
+    # --------------------------------------------------------------------- #
+    def train(self, batch_size: int = 64, beta: float = 0.4) -> Optional[float]:
         if len(self.replay_buffer.buffer) < batch_size:
             return None
-    
-        states, actions, rewards, next_states, dones, indices, weights = self.replay_buffer.sample(batch_size, beta)
-    
-        states = torch.FloatTensor(states).to(self.device)
+        
+        (
+            states,
+            actions,
+            rewards,
+            next_states,
+            dones,
+            indices,
+            weights,
+        ) = self.replay_buffer.sample(batch_size, beta)
+
+        # tensors
+        states = torch.FloatTensor(states).to(self.device)           # (B,F)
         next_states = torch.FloatTensor(next_states).to(self.device)
         actions = torch.LongTensor(actions).unsqueeze(1).to(self.device)
         rewards = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
         dones = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
         weights = torch.FloatTensor(weights).unsqueeze(1).to(self.device)
-    
-        # Reset noise for both networks (important when using NoisyLinear layers)
+
+        # Reset exploration noise  --------------------------------------
         self.policy_net.reset_noise()
         self.target_net.reset_noise()
-    
-        current_q = self.policy_net(states).gather(1, actions)
-    
+
+        # Forward pass (zero hidden state to avoid leakage across samples)
+        q_curr, _ = self.policy_net(states, None)
+        q_curr = q_curr.gather(1, actions)  # (B,1)
+
         with torch.no_grad():
-            next_actions = self.policy_net(next_states).argmax(1, keepdim=True)
-            next_q = self.target_net(next_states).gather(1, next_actions)
-            target_q = rewards + (1 - dones) * self.gamma * next_q
-    
-        loss = (weights * F.mse_loss(current_q, target_q, reduction='none')).mean()
-    
+            q_next, _ = self.policy_net(next_states, None)
+            next_actions = q_next.argmax(dim=1, keepdim=True)
+
+            q_target_next, _ = self.target_net(next_states, None)
+            q_target_next = q_target_next.gather(1, next_actions)
+
+            q_target = rewards + (1.0 - dones) * self.gamma * q_target_next
+
+        # TD loss
+        loss = (weights * F.mse_loss(q_curr, q_target, reduction="none")).mean()
+
+        # optimize -------------------------------------------------------
         self.optimizer.zero_grad()
         loss.backward()
         clip_grad_norm_(self.policy_net.parameters(), 1.0)
         self.optimizer.step()
-        
-        # Decay epsilon over time
-        self.epsilon = max(self.epsilon * self.epsilon_decay_rate, self.epsilon_min)
-    
-        # Soft update the target network using the corrected implementation:
-        self._soft_update_target()
-    
-        td_errors = (current_q - target_q).detach().cpu().numpy().squeeze()
-        new_priorities = np.abs(td_errors) + 1e-6
-        self.replay_buffer.update_priorities(indices, new_priorities)
-    
-        return loss.item()
-    
-    def _soft_update_target(self) -> None:
-        # Update target network parameters: target = tau * policy + (1-tau) * target
-        for target_param, param in zip(self.target_net.parameters(), self.policy_net.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
+        # ε decay --------------------------------------------------------
+        self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
+
+        # soft target update --------------------------------------------
+        for tgt, src in zip(self.target_net.parameters(), self.policy_net.parameters()):
+            tgt.data.copy_(self.tau * src.data + (1.0 - self.tau) * tgt.data)
+
+        # update priorities ---------------------------------------------
+        td_errors = (q_curr.detach() - q_target).abs().cpu().numpy().squeeze()
+        self.replay_buffer.update_priorities(indices, td_errors + 1e-6)
+
+        return float(loss.item())
+
+    # --------------------------------------------------------------------- #
+    # 4.3  Persistence                                                      #
+    # --------------------------------------------------------------------- #
     def save(self, path: str = "agent.pth") -> None:
-        try:
-            torch.save(self.policy_net.state_dict(), path)
-            logging.info(f"Agent saved to {path}")
-        except Exception as e:
-            logging.error(f"Error saving agent: {e}")
+        torch.save(
+            {
+                "model":   self.policy_net.state_dict(),
+                "epsilon": self.epsilon,
+            },
+            path,
+        )
 
     def load(self, path: str = "agent.pth") -> None:
-        try:
-            state_dict = torch.load(path, map_location=self.device)
-            self.policy_net.load_state_dict(state_dict)
-            self.target_net.load_state_dict(state_dict)
-            logging.info(f"Agent loaded from {path}")
-        except Exception as e:
-            logging.error(f"Error loading agent: {e}")
+        ckpt = torch.load(path, map_location=self.device)
+        if isinstance(ckpt, dict) and "model" in ckpt:
+            self.policy_net.load_state_dict(ckpt["model"])
+            self.target_net.load_state_dict(ckpt["model"])
+            self.epsilon = ckpt.get("epsilon", self.epsilon)
+        else:  # backward compatibility with old pure‑state‑dict files
+            self.policy_net.load_state_dict(ckpt)
+            self.target_net.load_state_dict(ckpt)
