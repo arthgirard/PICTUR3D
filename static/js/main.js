@@ -345,8 +345,8 @@ document.addEventListener("DOMContentLoaded", function() {
             x: {
               type: "time",
               time: {
-                parser: "YYYY-MM-DD",
-                tooltipFormat: "ll"
+                parser: "YYYY-MM-DD HH:mm",
+                tooltipFormat: "YYYY-MM-DD HH:mm"
               }
             }
           }
@@ -491,17 +491,21 @@ document.addEventListener("DOMContentLoaded", function() {
           const endDate = endDateInput.value;
           const numSimulations = document.getElementById("numSimulations").value;
           const saveResults = document.getElementById("saveResults").checked;
-          fetch("/start_simulation", {
+    
+          // pick correct back‑end depending on the dropdown
+          const endpoint = mode === "paper" ? "/start_paper" : "/start_simulation";
+    
+          fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               mode: mode,
               start_date: startDate,
               end_date: endDate,
-              number_of_simulations: totalSimulations,
+              number_of_simulations: numSimulations,
               save_graphs: saveResults
             })
-          })
+          })    
           .then(response => response.json())
           .then(data => {
             pollResults();
