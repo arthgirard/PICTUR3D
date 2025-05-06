@@ -9,6 +9,7 @@ from trading.bot import TradingBot
 from multiprocessing import Process
 from typing import Any, Dict, Optional
 import matplotlib
+import numpy as np
 matplotlib.use('Agg')
 
 app = Flask(__name__)
@@ -23,6 +24,9 @@ update_lock = Lock()
 simulation_process = None
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+
+ALL_ACTIONS = ["buy", "sell_all", "short", "cover_all", "hold", "long"]
+ACTION_WIDTH = 14
 
 def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, sim_logs: Any,
                             save_graphs: bool = True, data: Optional[pd.DataFrame] = None,
@@ -114,7 +118,12 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             current_buy_hold = []
 
         # Logging
-        log_message = f"{dates[-1]} | ACTION: {final_action} | PRICE: {price:.2f} | TOTAL ASSET: ${total_asset:.2f}"
+        action_fmt = f"{final_action:<{ACTION_WIDTH}}" 
+        price_fmt  = f"{price:>8.2f}"                 
+        log_message = (
+            f"{dates[-1]} | ACTION: {action_fmt} | "
+            f"PRICE: {price_fmt} | TOTAL ASSETS: ${total_asset:,.2f}"
+        )
         sim_logs.append(log_message)
 
         with update_lock:
@@ -179,9 +188,9 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             from datetime import datetime
             iteration_folder = os.path.join(batch_folder, f"iteration_{iteration}")
             os.mkdir(iteration_folder)
-            
+
             dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in dates]
-            
+
             # Equity chart with simulation and Buy & Hold curves.
             fig, ax = plt.subplots()
             ax.plot(dates_dt, asset_values, label="Equity Curve (USD)")
@@ -193,7 +202,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             fig.autofmt_xdate()
             fig.savefig(os.path.join(iteration_folder, "equity_chart.png"))
             plt.close(fig)
-            
+
             trade_dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in trade_dates]
             fig, ax = plt.subplots()
             ax.plot(dates_dt, sol_prices, label="SOL Price (USD)", color="blue")
@@ -209,7 +218,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             fig.autofmt_xdate()
             fig.savefig(os.path.join(iteration_folder, "sol_price_chart.png"))
             plt.close(fig)
-            
+
             if losses:
                 fig, ax = plt.subplots()
                 ax.plot(range(1, len(losses)+1), losses, label="Training Loss")
@@ -219,7 +228,7 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
                 ax.legend()
                 fig.savefig(os.path.join(iteration_folder, "loss_chart.png"))
                 plt.close(fig)
-                
+
             stats = {
                 "Final Balance": bot.current_balance,
                 "Final Position": bot.current_position,
@@ -230,23 +239,208 @@ def run_backtest_simulation(bot: TradingBot, stop_evt: Any, sim_results: Dict, s
             }
             df_stats = pd.DataFrame(list(stats.items()), columns=["Metric", "Value"])
             df_stats.to_excel(os.path.join(iteration_folder, "simulation_stats.xlsx"), index=False)
-            
+
             logging.info("Simulation iteration %d results saved to folder.", iteration)
         except Exception as e:
             logging.error("Error while saving simulation outputs: %s", e)
 
     return sim_results
 
+# --------------------------------------------------------------------------- #
+# Real‑time Alpaca paper‑trading loop (1‑min crypto bars)                    #
+# --------------------------------------------------------------------------- #
+def run_paper_trading(
+        bot: TradingBot,
+        stop_evt,
+        paper_results,
+        paper_logs,
+        symbol: str = "SOL/USD",
+        duration_minutes: Optional[int] = None
+) -> None:
+    """
+    Mirrors the back‑test logic but drives on live streaming bars pulled from
+    Alpaca’s crypto WebSocket.  Results & logs are pushed into the shared
+    Manager dict/list so the Flask UI can poll them exactly as for back‑tests.
+    """
+    import pandas as pd, talib
+    from datetime import datetime, timezone, timedelta
+    from collections import deque
+
+    start_ts = datetime.now(tz=timezone.utc)
+    df_cols = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    history = pd.DataFrame(columns=df_cols)          # rolling history window
+
+    # Series passed to the UI
+    dates, asset_vals, sol_prices = [], [], []
+    trade_dates, trade_prices, trade_sigs = [], [], []
+    first_price = None
+
+    bot.paper_client.reset_account(bot.initial_balance)
+
+    log = logging.getLogger("paper_loop")
+    log.info("🚀  Paper‑trading loop started for %s", symbol)
+
+    # --------------------------------------------------------------------- #
+    # Stream 1‑min bars forever (or until stop_evt / duration reached)     #
+    # --------------------------------------------------------------------- #
+    for bar in bot.paper_client.stream_bars(symbol):
+        if stop_evt.is_set():
+            log.info("Stop event received – shutting paper loop down.")
+            break
+        if duration_minutes and \
+           datetime.now(tz=timezone.utc) - start_ts >= timedelta(minutes=duration_minutes):
+            log.info("Duration limit reached – shutting paper loop down.")
+            break
+
+        # ─── store current bar ─────────────────────────────────────────────
+        row_dict = {
+            "Date":   bar.t,
+            "Open":   float(bar.open),
+            "High":   float(bar.high),
+            "Low":    float(bar.low),
+            "Close":  float(bar.close),
+            "Volume": float(bar.volume),
+        }
+        history.loc[len(history)] = row_dict    
+
+        # We always try to compute indicators, even if there are only a few rows.
+        # TA‑Lib will return NaN until it has enough data – we simply fill those with 0.
+        close = history["Close"].astype(float).to_numpy()
+        high  = history["High"].astype(float).to_numpy()
+        low   = history["Low"].astype(float).to_numpy()
+
+        # Safe helpers ------------------------------------------------------
+        def last_or_zero(obj):
+            """
+            Return the last finite value of a 1‑D NumPy array *or* pandas Series,
+            falling back to 0.0 for empty / all‑nan input.
+            """
+            if obj is None or len(obj) == 0:
+                return 0.0
+            if isinstance(obj, pd.Series):
+                val = obj.iloc[-1]
+            else:                          # NumPy array / list
+                val = obj[-1]
+            return 0.0 if (pd.isna(val) or np.isnan(val)) else float(val)
+
+
+        sma20 = last_or_zero(talib.SMA(close, 20))
+        rsi14 = last_or_zero(talib.RSI(close, 14))
+        macd, macd_sig, _ = talib.MACD(close, 12, 26, 9)
+        macd_v   = last_or_zero(macd)
+        macd_sig = last_or_zero(macd_sig)
+        std20 = last_or_zero(pd.Series(close).rolling(20).std())
+        mid_band   = sma20
+        upper_band = mid_band + 2 * std20
+        lower_band = mid_band - 2 * std20
+        volat   = last_or_zero(pd.Series(close).pct_change().rolling(20).std())
+        atr14   = last_or_zero(talib.ATR(high, low, close, 14))
+
+        live_row = pd.Series({
+            "SMA_20": sma20,
+            "RSI": rsi14,
+            "MACD": macd_v,
+            "Signal": macd_sig,
+            "Middle_Band": mid_band,
+            "Upper_Band": upper_band,
+            "Lower_Band": lower_band,
+            "Volatility": volat,
+            "Volume": history["Volume"].iloc[-1],
+            "ATR": atr14,
+        })
+
+
+        # ----- decision, execution, learning ----------------------------
+        features     = bot._build_feature_vector(live_row, bar.t)
+        action_idx   = bot.agent.select_action(features)
+        forced_sig   = bot._check_risk_management(bar.close, atr14)
+        final_action = bot._execute_trade(
+            action_idx if forced_sig is None else forced_sig,
+            bar.close,
+            atr14,
+            mode_client="paper",
+            features=features,
+        )
+
+        # ----- bookkeeping ---------------------------------------------
+        if final_action != "hold":
+            trade_dates.append(bar.t.strftime("%Y-%m-%d %H:%M"))
+            trade_prices.append(bar.close)
+            trade_sigs.append(final_action)
+
+        cash, pos = bot.paper_client.account_state()
+        tot_asset = cash + pos * bar.close
+        label     = bar.t.strftime("%Y-%m-%d %H:%M")
+        dates.append(label)
+        asset_vals.append(tot_asset)
+        sol_prices.append(bar.close)
+
+        if first_price is None:
+            first_price = bar.close
+        buy_hold_equity = [bot.initial_balance * (p / first_price) for p in sol_prices]
+
+        log_line = f"{label} | ACTION: {final_action.upper()} | price={bar.close:.2f} | equity=${tot_asset:.2f}"
+        paper_logs.append(log_line)
+
+        with update_lock:            # push snapshot to UI every bar
+            paper_results.update({
+                "dates": dates,
+                "asset_values": asset_vals,
+                "sol_prices": sol_prices,
+                "buy_hold_equity": buy_hold_equity,
+                "trade_dates": trade_dates,
+                "trade_prices": trade_prices,
+                "trade_signals": trade_sigs,
+                "losses": [],
+                "final_balance": cash,
+                "final_position": pos,
+                "num_trades": len(trade_dates),
+                "percentage_return": ((tot_asset - bot.initial_balance) / bot.initial_balance) * 100,
+                "net_profit": tot_asset - bot.initial_balance,
+                "finished": False,
+            })
+
+    # ---------- exit -------------------------------------------
+    with update_lock:
+        paper_results["finished"] = True
+    log.info("Paper‑trading loop finished")
+
+def _paper_worker(stop_evt, sim_results, sim_logs, symbol, duration):
+    """
+    Spawned in a separate **process** by /start_paper.
+    It now loads the pre-trained agent weights so paper trading
+    uses exactly the same policy as backtesting.
+    """
+    bot = TradingBot(mode="paper", device="cpu")
+
+    # load agent.pth if exist
+    try:
+        bot.load_state()
+        # zero exploration
+        bot.agent.epsilon = bot.agent.epsilon_min
+    except FileNotFoundError:
+        import logging
+        logging.warning("agent.pth not found, starting fresh.")
+
+    run_paper_trading(
+        bot,
+        stop_evt,
+        sim_results,
+        sim_logs,
+        symbol=symbol,
+        duration_minutes=duration,
+    )
+
 def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, start_date: str, end_date: Optional[str],
                    number_of_simulations: int, save_graphs: bool) -> None:
     stop_evt.clear()
-    
+
     # Create a persistent TradingBot instance to retain training across iterations.
     bot = TradingBot(mode=mode, device="cpu", start_date=start_date, end_date=end_date)
     if os.path.exists("agent.pth"):
         bot.load_state()
     data = bot.data_handler.download_data()
-    
+
     batch_folder = None
     if save_graphs:
         root_folder = os.path.join(os.getcwd(), "backtest_results")
@@ -254,7 +448,7 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
             os.mkdir(root_folder)
         batch_folder = os.path.join(root_folder, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
         os.mkdir(batch_folder)
-    
+
     sim_results["finished"] = False
     sim_results["total_simulations"] = number_of_simulations
 
@@ -262,21 +456,21 @@ def run_simulation(stop_evt: Any, sim_results: Dict, sim_logs: Any, mode: str, s
         if stop_evt.is_set():
             logging.info("Stop event detected before iteration %d; exiting.", i+1)
             break
-        
+
         sim_results["iteration"] = i + 1
         sim_logs[:] = []
-        
+
         logging.info("Starting simulation iteration %d of %d", i+1, number_of_simulations)
         final_iteration = (i == number_of_simulations - 1)
         run_backtest_simulation(bot, stop_evt, sim_results, sim_logs, save_graphs, data=data,
                                 iteration=i+1, batch_folder=batch_folder, final_iteration=final_iteration)
-        
+
         if stop_evt.is_set():
             logging.info("Stop event detected after iteration %d; exiting.", i+1)
             break
         else:
             stop_evt.clear()
-    
+
     if not stop_evt.is_set():
         sim_results["finished"] = True
     time.sleep(1)
@@ -321,7 +515,7 @@ def start_simulation() -> Any:
     end_date = req.get("end_date", None)
     number_of_simulations = int(req.get("number_of_simulations", 1))
     save_graphs = bool(req.get("save_graphs", False))
-    
+
     simulation_process = Process(
         target=run_simulation,
         args=(stop_event, simulation_results, simulation_logs, mode, start_date, end_date,
@@ -335,6 +529,33 @@ def start_simulation() -> Any:
 def stop_simulation() -> Any:
     stop_simulation_logic()
     return jsonify({"status": "Stop signal sent and performance metrics saved."})
+
+@app.route("/start_paper", methods=["POST"])
+def start_paper():
+    """
+    Launch a real‑time Alpaca paper‑trading session in a background process.
+    Body JSON accepts:
+        - symbol   : crypto symbol, default "SOL/USD"
+        - duration : minutes to run (omit or null to run until /stop_simulation)
+    """
+    global simulation_process
+    simulation_results.clear()
+    simulation_logs[:] = []
+    stop_event.clear()
+
+    req       = request.get_json(force=True, silent=True) or {}
+    symbol    = req.get("symbol", "SOL/USD")
+    duration  = req.get("duration")          # may be None / null
+    duration  = int(duration) if duration else None
+
+    simulation_process = Process(
+        target=_paper_worker,
+        args=(stop_event, simulation_results, simulation_logs, symbol, duration),
+    )
+    simulation_process.start()
+    logging.info("Started paper‑trading process for %s (duration=%s)", symbol, duration)
+    return jsonify({"status": "Paper trading started", "symbol": symbol})
+
 
 @app.route("/results", methods=["GET"])
 def results_route() -> Any:
@@ -362,7 +583,7 @@ def agent_performance() -> Any:
 def delete_agent() -> Any:
     global simulation_process
     stop_simulation_logic()
-    
+
     confirmation = request.json.get("confirmation", False)
     if confirmation:
         files_to_delete = ["agent.pth", "scaler.pkl", "performance_history.json"]

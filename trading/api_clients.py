@@ -7,6 +7,17 @@ import hashlib
 import hmac
 import base64
 from typing import Tuple, Optional, Dict, Any
+import sys, asyncio
+# Windows needs a SelectorEventLoop for aiodns / aiohttp combination
+if sys.platform.startswith("win"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+import aiohttp
+from datetime import datetime, timezone
+import json
+from config import (
+    INITIAL_BALANCE,
+    ALPACA_PAPER_BASE_URL,
+)
 
 class BaseAPIClient:
     """
@@ -25,35 +36,134 @@ class BaseAPIClient:
         signature = hmac.new(base64.b64decode(api_secret), message, hashlib.sha512)
         return base64.b64encode(signature.digest())
 
+class AlpacaPaperClient:
+    """
+    Thin wrapper around Alpaca’s paper‑trading REST & WebSocket.
+    Keeps only the calls needed by our bot.
+    """
+    def __init__(
+        self,
+        api_key: str,
+        api_secret: str,
+        base_url: str = ALPACA_PAPER_BASE_URL,
+        data_url: str = "https://data.alpaca.markets/v2",
+    ) -> None:
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.base_url = base_url.rstrip("/")
+        self.data_url = data_url.rstrip("/")
 
-class PaperTradingClient:
-    """
-    Simulated trading client for paper trading.
-    """
-    def __init__(self, initial_balance: float = 10000.0) -> None:
-        self.balance: float = initial_balance
+        self.headers = {
+            "APCA-API-KEY-ID": self.api_key,
+            "APCA-API-SECRET-KEY": self.api_secret,
+        }
+
+        # Local mirror of cash & position
+        self.cash: float = INITIAL_BALANCE
         self.position: float = 0.0
-        self.fee_rate: float = 0.001
+        self.fee_rate: float = 0.001  # keep fees consistent with backtest
 
-    def get_balance(self) -> Tuple[float, float]:
-        return self.balance, self.position
+    # --------------------------------------------------------------
+    # Account helpers
+    # --------------------------------------------------------------
+    def account_state(self) -> Tuple[float, float]:
+        """Return (cash, position) – updated locally after each order."""
+        return self.cash, self.position
 
-    def place_order(self, side: str, percentage: float, price: float) -> None:
+    def reset_account(self, starting_balance: float = INITIAL_BALANCE) -> None:
+        self.cash = starting_balance
+        self.position = 0.0
+
+    # --------------------------------------------------------------
+    # Order endpoints
+    # --------------------------------------------------------------
+    def place_order(self, side: str, qty: float, price: float) -> None:
+        """
+        Market order simulator (we don’t need limit orders for the bot).
+        """
         if side == "buy":
-            trade_amount_usd = self.balance * percentage
-            btc_bought = (trade_amount_usd * (1 - self.fee_rate)) / price
-            self.balance -= trade_amount_usd
-            self.position += btc_bought
-            logging.info(f"Paper Trading BUY: Spent {trade_amount_usd:.2f} USD to buy {btc_bought:.6f} BTC at price {price:.2f}")
-        elif side == "sell" and self.position > 0:
-            btc_to_sell = self.position * percentage
-            proceeds = btc_to_sell * price * (1 - self.fee_rate)
-            self.balance += proceeds
-            self.position -= btc_to_sell
-            logging.info(f"Paper Trading SELL: Sold {btc_to_sell:.6f} BTC for {proceeds:.2f} USD at price {price:.2f}")
-        else:
-            logging.info("No action taken in paper trading.")
+            cost = qty * price * (1 + self.fee_rate)
+            if cost > self.cash:
+                qty = self.cash / (price * (1 + self.fee_rate))
+                cost = qty * price * (1 + self.fee_rate)
+            self.cash -= cost
+            self.position += qty
 
+        elif side == "sell":
+            qty = min(qty, self.position)
+            proceeds = qty * price * (1 - self.fee_rate)
+            self.cash += proceeds
+            self.position -= qty
+
+    # ---- Shorting helpers -----------------------------------------
+    def open_short(self, qty: float, price: float) -> None:
+        """
+        Increase a short position by ‘borrowing’ and selling qty.
+        """
+        proceeds = qty * price * (1 - self.fee_rate)
+        self.cash += proceeds
+        self.position -= qty  # negative position
+
+    def close_short(self, price: float) -> None:
+        """
+        Buy back the entire short position at market.
+        """
+        if self.position >= 0:
+            return  # nothing to cover
+        qty = -self.position
+        cost = qty * price * (1 + self.fee_rate)
+        self.cash -= cost
+        self.position = 0.0
+
+    # --------------------------------------------------------------
+    # Live bar streaming (crypto, 1‑min) via WebSocket
+    # --------------------------------------------------------------
+    async def _socket_generator(self, symbol: str, timeframe: str = "1Min"):
+        url = "wss://stream.data.alpaca.markets/v1beta3/crypto/us"
+        auth_msg = {"action": "auth", "key": self.api_key, "secret": self.api_secret}
+        sub_msg = {"action": "subscribe", "bars": [symbol]}
+        async with aiohttp.ClientSession() as session, session.ws_connect(url) as ws:
+            await ws.send_json(auth_msg)
+            await ws.send_json(sub_msg)
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    data = msg.json(loads=json.loads)
+                    for event in data:
+                        if event.get("T") == "b":  # bar event
+                            yield event
+
+    def stream_bars(self, symbol: str):
+        """
+        Synchronous wrapper around the async websocket generator –
+        yields a namedtuple‑like object with .t, .open, .high, .low, .close, .volume
+        """
+        import threading, queue, collections
+
+        Bar = collections.namedtuple("Bar", "t open high low close volume")
+        q: "queue.Queue[Bar]" = queue.Queue()
+
+        async def _runner():
+            async for ev in self._socket_generator(symbol):
+                raw_t = ev["t"]
+                if isinstance(raw_t, (int, float)):
+                    ts = datetime.fromtimestamp(raw_t / 1_000_000, tz=timezone.utc)
+                else:
+                    ts = datetime.fromisoformat(raw_t.replace("Z", "+00:00"))
+                q.put(
+                    Bar(
+                        t=ts,
+                        open=float(ev["o"]),
+                        high=float(ev["h"]),
+                        low=float(ev["l"]),
+                        close=float(ev["c"]),
+                        volume=float(ev["v"]),
+                    )
+                )
+
+        threading.Thread(target=lambda: asyncio.run(_runner()), daemon=True).start()
+
+        while True:
+            yield q.get()
 
 class KrakenClient(BaseAPIClient):
     """
