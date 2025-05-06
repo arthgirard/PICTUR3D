@@ -5,9 +5,9 @@
   --card-bg-light: #f8f9fa;
   --navbar-bg-light: #e3f2fd;
   
-  --bg-color-dark: #131313;
+  --bg-color-dark: #161616;
   --text-color-dark: #e3e3e3;
-  --card-bg-dark: #1e1e1e;
+  --card-bg-dark: #1a1a1a;
   --navbar-bg-dark: #1e1e1e;
 }
 
@@ -169,12 +169,12 @@ body.dark-mode #themeToggle:hover {
 
 body.dark-mode .card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.8);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
 }
 
 body.dark-mode .card {
   background-color: var(--card-bg-dark);
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
 }
 
 /* Default (not trading): display elements in normal flow */
