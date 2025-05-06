@@ -246,6 +246,7 @@ body.dark-mode .card {
   transition: background 0.3s ease;
   background-color: rgba(255, 255, 255, 0.02);
   scrollbar-width: none;
+  white-space: pre;
 }
 
 body.dark-mode .live-actions 
