@@ -370,6 +370,7 @@ class TradingAgent:
             {
                 "model":   self.policy_net.state_dict(),
                 "epsilon": self.epsilon,
+                "buffer":  self.replay_buffer,          # pickles fine
             },
             path,
         )
@@ -380,6 +381,7 @@ class TradingAgent:
             self.policy_net.load_state_dict(ckpt["model"])
             self.target_net.load_state_dict(ckpt["model"])
             self.epsilon = ckpt.get("epsilon", self.epsilon)
-        else:  # backward compatibility with old pure‑state‑dict files
+            self.replay_buffer = ckpt.get("buffer", self.replay_buffer)
+        else:                                # legacy files (weights only)
             self.policy_net.load_state_dict(ckpt)
             self.target_net.load_state_dict(ckpt)
