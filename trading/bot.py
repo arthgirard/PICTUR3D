@@ -80,7 +80,6 @@ class TradingBot:
         self.current_position = 0.0
         self.trading_fee = 0.001
         self.avg_entry_price: Optional[float] = None
-        self.sentiment_cache: Dict[str, float] = {}
 
         # Execution clients
         if self.mode == "paper":
@@ -387,6 +386,12 @@ class TradingBot:
     
             atr = row.get("ATR", 0.0)
             features = self._get_features(row)
+            if idx < len(data) - 1:
+                next_features = self._get_features(data.iloc[idx + 1])
+                done = False
+            else:
+                next_features = features
+                done = True
             action_idx = self.agent.select_action(features)
             price = float(row['Close']) if not hasattr(row['Close'], 'iloc') else float(row['Close'].iloc[0])
             forced_signal = self._check_risk_management(price, atr)
@@ -437,7 +442,13 @@ class TradingBot:
             # Removed reward clipping so the learning signal better reflects actual performance.
     
     
-            self.agent.replay_buffer.add(features, action_idx if forced_signal is None else 0, reward, features, False)
+            self.agent.replay_buffer.add(
+              features,
+              action_idx if forced_signal is None else 0,
+              reward,
+              next_features,
+              done,
+            )
             loss = self.agent.train(batch_size=64)
             if loss is not None:
                 losses.append(loss)
