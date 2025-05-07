@@ -372,7 +372,7 @@ document.addEventListener("DOMContentLoaded", function() {
             fill: false
           }]
         },
-        options: {responsive: true},
+        options: {responsive: true, animation: false},
         plugins: {
           decimation: decimation
         }
