@@ -14,3 +14,8 @@ This is a DQN algorithm which is able to save its training weights, scaler and p
 
 ### Web interface
 The web interface is pretty minimalistic, presenting live logs and four graphs to measure equity, training loss and bot performance, but also to track where the agent has placed orders over the SOL price chart. The dates of the simulation can be modified along with the number of simulations in a row. It is optional, but the code can also save its results to a folder automatically created in the root of the project.
+
+## Troubleshooting
+
+### Rate limited error
+If the Yahoo Finance rate limitation error is encountered, it can be easily fixed by upgrading the module using `pip install yfinance --upgrade` 
