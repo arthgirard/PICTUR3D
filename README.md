@@ -14,6 +14,7 @@ Third version (first public version) of a personal algorithmic SOLANA trading re
      tar -xzf ta-lib-0.4.0-src.tar.gz && cd ta-lib
      ./configure --prefix=/usr && make
      sudo make install
+     cd ..
      ```
    - **Windows** – download and run the installer from [ta-lib.org](https://ta-lib.org/install/)
 3. After the library is installed, execute `pip install -r requirements.txt`
