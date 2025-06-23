@@ -15,12 +15,8 @@ Third version (first public version) of a personal algorithmic SOLANA trading re
      ./configure --prefix=/usr && make
      sudo make install
      ```
-   - **Windows** – download and run the installer from [ta-lib.org](https://www.ta-lib.org/hdr_dw.html)
+   - **Windows** – download and run the installer from [ta-lib.org](https://ta-lib.org/install/)
 3. After the library is installed, execute `pip install -r requirements.txt`
-   - If the build for the Python wrapper **ta-lib** fails, install a pre-built wheel from the [TA‑Lib release page](https://github.com/mrjbq7/ta-lib/releases) that matches your Python version, e.g.:
-     ```bash
-     pip install https://github.com/mrjbq7/ta-lib/releases/download/0.4.0/TA_Lib-0.4.0-cp310-cp310-manylinux_2_17_x86_64.whl
-     ```
 4. Run the code in the root folder using `python app.py`
 5. Access your interface at `127.0.0.1:5000`
 
