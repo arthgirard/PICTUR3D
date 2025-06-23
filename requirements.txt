@@ -13,4 +13,3 @@ openpyxl
 ta-lib
 alpaca-trade-api
 aiohttp
-winloop
