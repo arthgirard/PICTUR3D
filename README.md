@@ -3,13 +3,26 @@ Third version (first public version) of a personal algorithmic SOLANA trading re
 
 ## Getting started
 1. Install Python 3.10
-2. In a terminal, execute `pip install -r requirements.txt`
-   - If the build for **ta-lib** fails, install a pre-built wheel from the [TA‑Lib release page](https://github.com/mrjbq7/ta-lib/releases) that matches your Python version, e.g.:
+2. Install the **TA‑Lib** C library for your platform:
+   - **macOS** (Homebrew)
+     ```bash
+     brew install ta-lib
+     ```
+   - **Linux** – compile from source
+     ```bash
+     wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+     tar -xzf ta-lib-0.4.0-src.tar.gz && cd ta-lib
+     ./configure --prefix=/usr && make
+     sudo make install
+     ```
+   - **Windows** – download and run the installer from [ta-lib.org](https://www.ta-lib.org/hdr_dw.html)
+3. After the library is installed, execute `pip install -r requirements.txt`
+   - If the build for the Python wrapper **ta-lib** fails, install a pre-built wheel from the [TA‑Lib release page](https://github.com/mrjbq7/ta-lib/releases) that matches your Python version, e.g.:
      ```bash
      pip install https://github.com/mrjbq7/ta-lib/releases/download/0.4.0/TA_Lib-0.4.0-cp310-cp310-manylinux_2_17_x86_64.whl
      ```
-3. Run the code in the root folder using `python app.py`
-4. Access your interface at `127.0.0.1:5000`
+4. Run the code in the root folder using `python app.py`
+5. Access your interface at `127.0.0.1:5000`
 
 ## Features
 
